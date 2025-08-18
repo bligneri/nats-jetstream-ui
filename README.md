@@ -1,0 +1,2 @@
+# nats-jetstream-ui
+A modern, responsive web application for viewing and managing a NATS Jetstream backend. It provides a beautiful and intuitive interface to monitor streams, consumers, and messages
