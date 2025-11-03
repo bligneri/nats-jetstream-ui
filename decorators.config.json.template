@@ -1,0 +1,194 @@
+{
+  "servers": [
+    {
+      "id": 1,
+      "name": "Production Server",
+      "url": "nats://localhost:4222",
+      "decorators": [
+        {
+          "pattern": "orders.dlq.*",
+          "highlightFields": ["order_id", "error_reason", "retry_count"],
+          "fieldLabels": {
+            "order_id": "Order ID",
+            "error_reason": "Error",
+            "retry_count": "Retries"
+          },
+          "color": "red"
+        },
+        {
+          "pattern": "orders.completed.*",
+          "highlightFields": ["order_id", "customer_name", "total_amount"],
+          "fieldLabels": {
+            "order_id": "Order",
+            "customer_name": "Customer",
+            "total_amount": "Total"
+          },
+          "color": "green"
+        },
+        {
+          "pattern": "orders.*",
+          "highlightFields": ["order_id", "status"],
+          "fieldLabels": {
+            "order_id": "Order",
+            "status": "Status"
+          },
+          "color": "blue"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Analytics Server",
+      "url": "nats://localhost:4223",
+      "decorators": [
+        {
+          "pattern": "events.user.*",
+          "highlightFields": ["user_id", "event_type", "timestamp"],
+          "fieldLabels": {
+            "user_id": "User",
+            "event_type": "Event",
+            "timestamp": "Time"
+          },
+          "color": "purple"
+        },
+        {
+          "pattern": "metrics.>",
+          "highlightFields": ["metric_name", "value", "unit"],
+          "fieldLabels": {
+            "metric_name": "Metric",
+            "value": "Value",
+            "unit": "Unit"
+          },
+          "color": "yellow"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "IoT Data Server",
+      "url": "nats://localhost:4224",
+      "decorators": [
+        {
+          "pattern": "sensors.temperature.*",
+          "highlightFields": ["device_id", "temperature", "humidity", "timestamp"],
+          "fieldLabels": {
+            "device_id": "Device",
+            "temperature": "Temp (°C)",
+            "humidity": "Humidity (%)",
+            "timestamp": "Time"
+          },
+          "color": "blue"
+        }
+      ]
+    }
+  ],
+  "_examples": {
+    "description": "Message structure examples for different field extraction patterns",
+    "direct_fields": {
+      "description": "Simple top-level fields - extracted directly",
+      "message": {
+        "order_id": "ORD-12345",
+        "customer_name": "John Doe",
+        "total_amount": 99.99,
+        "status": "completed"
+      },
+      "extracted": {
+        "order_id": "ORD-12345",
+        "customer_name": "John Doe"
+      }
+    },
+    "sql_null_types": {
+      "description": "Go SQL null types (NullString, NullInt, etc.) - automatically unwrapped",
+      "message": {
+        "device_id": {
+          "String": "DEV-789",
+          "Valid": true
+        },
+        "temperature": 23.5,
+        "user_name": {
+          "String": "",
+          "Valid": false
+        },
+        "timestamp": "2025-05-20T19:00:00Z"
+      },
+      "extracted": {
+        "device_id": "DEV-789",
+        "temperature": 23.5,
+        "user_name": null,
+        "timestamp": "2025-05-20T19:00:00Z"
+      },
+      "notes": [
+        "Fields with Valid=true extract the String/Int64 value",
+        "Fields with Valid=false extract as null",
+        "Direct fields (temperature, timestamp) pass through unchanged"
+      ]
+    },
+    "mixed_fields": {
+      "description": "Combination of direct values and SQL null types",
+      "message": {
+        "serial": {
+          "String": "30230338",
+          "Valid": true
+        },
+        "machine_id": {
+          "String": "",
+          "Valid": false
+        },
+        "control": "BLUETOOTH",
+        "hub_mesh": "0x8F995923",
+        "temperature": 25.3,
+        "mode": {
+          "String": "AUTO",
+          "Valid": true
+        }
+      },
+      "extracted": {
+        "serial": "30230338",
+        "machine_id": null,
+        "control": "BLUETOOTH",
+        "hub_mesh": "0x8F995923",
+        "mode": "AUTO"
+      }
+    },
+    "missing_fields": {
+      "description": "Fields not present in message are silently ignored",
+      "message": {
+        "order_id": "ORD-999",
+        "status": "pending"
+      },
+      "decorator_requests": ["order_id", "status", "customer_name", "total"],
+      "extracted": {
+        "order_id": "ORD-999",
+        "status": "pending"
+      },
+      "notes": "customer_name and total are not shown since they don't exist"
+    },
+    "pattern_matching": {
+      "description": "Subject patterns use NATS wildcards",
+      "patterns": {
+        "orders.dlq.*": "Matches orders.dlq.failed, orders.dlq.expired, etc.",
+        "orders.*": "Matches orders.new, orders.completed, etc. (single token)",
+        "orders.>": "Matches orders.new, orders.dlq.failed, etc. (multiple tokens)",
+        "*.metrics.cpu": "Matches server1.metrics.cpu, server2.metrics.cpu, etc.",
+        "sensors.>": "Matches all sensors.* subjects at any depth"
+      },
+      "notes": [
+        "Patterns are matched in order - first match wins",
+        "More specific patterns should come before general ones",
+        "Use * for single token wildcard",
+        "Use > for multi-token wildcard (rest of subject)"
+      ]
+    },
+    "color_options": {
+      "description": "Available color themes for decorators",
+      "colors": ["red", "green", "blue", "yellow", "purple"],
+      "usage": {
+        "red": "Errors, DLQ, failures",
+        "green": "Success, completed, active",
+        "blue": "Info, processing, general",
+        "yellow": "Warnings, pending, attention",
+        "purple": "Analytics, aggregated, special"
+      }
+    }
+  }
+}

@@ -8,8 +8,6 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       natsUrl: process.env.NUXT_PUBLIC_NATS_URL || '',
-      natsUser: process.env.NUXT_PUBLIC_NATS_USER || '',
-      natsPassword: process.env.NUXT_PUBLIC_NATS_PASSWORD || '',
     },
   },
   app: {

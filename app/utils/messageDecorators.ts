@@ -12,19 +12,26 @@ export interface MessageDecorator {
 // Cache for decorators loaded from API
 let decoratorsCache: MessageDecorator[] | null = null;
 
-export async function loadDecorators(forceReload = false): Promise<MessageDecorator[]> {
-  if (decoratorsCache && !forceReload) {
+export async function loadDecorators(serverId?: number, forceReload = false): Promise<MessageDecorator[]> {
+  if (decoratorsCache && !forceReload && !serverId) {
     return decoratorsCache;
   }
 
   try {
-    decoratorsCache = await $fetch<MessageDecorator[]>('/api/decorators');
-    console.log('📋 Loaded decorators:', decoratorsCache.length);
-    return decoratorsCache;
+    const url = serverId ? `/api/decorators?serverId=${serverId}` : '/api/decorators';
+    const decorators = await $fetch<MessageDecorator[]>(url);
+    console.log(`📋 Loaded decorators for server ${serverId || 'default'}:`, decorators.length);
+    if (!serverId) {
+      decoratorsCache = decorators;
+    }
+    return decorators;
   } catch (error) {
     console.warn('Failed to load decorators, using empty config');
-    decoratorsCache = [];
-    return [];
+    const emptyDecorators: MessageDecorator[] = [];
+    if (!serverId) {
+      decoratorsCache = emptyDecorators;
+    }
+    return emptyDecorators;
   }
 }
 
@@ -58,7 +65,13 @@ export function extractHighlightedFields(
   const highlighted: Record<string, any> = {};
   for (const field of decorator.highlightFields) {
     if (data && field in data) {
-      highlighted[field] = data[field];
+      const value = data[field];
+      // Handle SQL NullString/NullInt pattern: { String: "value", Valid: true }
+      if (value && typeof value === 'object' && 'String' in value && 'Valid' in value) {
+        highlighted[field] = value.Valid ? value.String : null;
+      } else {
+        highlighted[field] = value;
+      }
     }
   }
   return highlighted;

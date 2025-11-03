@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, onMounted } from 'vue';
 import type { NatsConnectionDetails } from '~/types';
 import NatsIcon from '~/components/icons/NatsIcon.vue';
 import SpinnerIcon from '~/components/icons/SpinnerIcon.vue';
@@ -11,9 +11,40 @@ const router = useRouter();
 const config = useRuntimeConfig();
 const route = useRoute();
 
-const serverUrl = ref(config.public.natsUrl || 'nats://localhost:4222');
-const user = ref(config.public.natsUser || '');
-const password = ref(config.public.natsPassword || '');
+// Load servers from config
+const servers = ref<any[]>([]);
+const selectedServerId = ref<number | null>(null);
+const useCustomServer = ref(false);
+
+onMounted(async () => {
+  try {
+    const serverConfig = await $fetch<any>('/api/servers');
+    servers.value = serverConfig.servers;
+    if (servers.value.length > 0 && !config.public.natsUrl) {
+      selectedServerId.value = servers.value[0].id;
+    }
+  } catch (error) {
+    console.error('Failed to load server config:', error);
+  }
+});
+
+const serverUrl = ref(config.public.natsUrl || '');
+
+// Watch for custom URL input - if user types, switch to custom mode
+watch(serverUrl, (newVal) => {
+  if (newVal) {
+    useCustomServer.value = true;
+    selectedServerId.value = null;
+  }
+});
+
+// Watch for server selection - clear custom URL
+watch(selectedServerId, (newVal) => {
+  if (newVal) {
+    useCustomServer.value = false;
+    serverUrl.value = '';
+  }
+});
 
 // Check if user manually disconnected (came from dashboard)
 const manualDisconnect = ref(route.query.disconnected === 'true');
@@ -27,10 +58,30 @@ const showForm = ref(!shouldAutoConnect);
 const handleConnect = async () => {
   isConnecting.value = true;
   error.value = null;
+
+  // Determine which server to connect to
+  let url = serverUrl.value;
+  let targetServerId = 0; // Custom server by default
+
+  if (!url && selectedServerId.value) {
+    // Use selected server from dropdown
+    const server = servers.value.find(s => s.id === selectedServerId.value);
+    if (server) {
+      url = server.url;
+      targetServerId = server.id;
+    }
+  }
+
+  if (!url) {
+    error.value = 'Please select a server or enter a custom URL';
+    isConnecting.value = false;
+    return;
+  }
+
   const details: NatsConnectionDetails = {
-    serverUrl: serverUrl.value,
-    user: user.value,
-    password: password.value
+    serverUrl: url,
+    user: '',
+    password: ''
   };
   try {
     await $fetch('/api/connect', {
@@ -38,7 +89,9 @@ const handleConnect = async () => {
       body: details,
     });
     setConnection(details);
-    router.push('/dashboard');
+    // Redirect to server-specific dashboard with full page reload
+    const dashboardUrl = `/${targetServerId || selectedServerId.value || 1}/dashboard`;
+    window.location.href = dashboardUrl;
   } catch (err: any) {
     error.value = err.data?.statusMessage || 'An unknown error occurred.';
     showForm.value = true; // Show form on error
@@ -83,30 +136,29 @@ if (shouldAutoConnect) {
 
       <div class="rounded-lg bg-slate-800/50 p-8 shadow-2xl backdrop-blur-sm">
         <form @submit.prevent="handleConnect" class="space-y-6">
+          <!-- Server Selection -->
+          <div v-if="servers.length > 0">
+            <label for="server-select" class="block text-sm font-medium text-slate-300 mb-2">Select Server</label>
+            <select
+              id="server-select"
+              v-model="selectedServerId"
+              class="w-full rounded-md bg-slate-700 border border-slate-600 px-3 py-2 text-slate-200 focus:border-green-400 focus:outline-none focus:ring-1 focus:ring-green-400"
+            >
+              <option v-for="server in servers" :key="server.id" :value="server.id">
+                {{ server.name }} ({{ server.url }})
+              </option>
+            </select>
+          </div>
+
+          <div class="text-center text-sm text-slate-500">— or —</div>
+
           <UiInput
             id="serverUrl"
-            label="Server URL"
+            label="Custom Server URL"
             type="text"
             v-model="serverUrl"
-            required
-            placeholder="e.g., nats://localhost:4222"
+            placeholder="e.g., nats://user:pass@localhost:4222"
           />
-          <div class="grid grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-2">
-            <UiInput
-              id="user"
-              label="Username"
-              type="text"
-              v-model="user"
-              placeholder="(Optional)"
-            />
-            <UiInput
-              id="password"
-              label="Password"
-              type="password"
-              v-model="password"
-              placeholder="(Optional)"
-            />
-          </div>
           <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
           <UiButton type="submit" :disabled="isConnecting" class="w-full">
             <span v-if="isConnecting" class="flex items-center justify-center">

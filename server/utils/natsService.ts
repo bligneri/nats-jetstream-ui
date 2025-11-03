@@ -202,23 +202,28 @@ export class NatsService {
 
           if (subjectMap.size > 0) {
             // Create virtual streams for each subject
+            // Filter out subjects with 0 messages (likely from down/unreachable external sources)
             for (const [subject, messageCount] of subjectMap.entries()) {
-              streams.push({
-                ...baseStream,
-                config: {
-                  ...baseStream.config,
-                  name: `${baseStream.config.name}/${subject}`,
-                  subjects: [subject], // Exact subject
-                },
-                state: {
-                  ...baseStream.state,
-                  messages: messageCount, // Accurate count from stream info
-                  bytes: -1, // Unknown - will display as "Unknown" in UI
-                },
-                isVirtual: true,
-                parentStream: baseStream.config.name,
-                virtualSubject: subject,
-              });
+              if (messageCount > 0) {
+                streams.push({
+                  ...baseStream,
+                  config: {
+                    ...baseStream.config,
+                    name: `${baseStream.config.name}/${subject}`,
+                    subjects: [subject], // Exact subject
+                  },
+                  state: {
+                    ...baseStream.state,
+                    messages: messageCount, // Accurate count from stream info
+                    bytes: -1, // Unknown - will display as "Unknown" in UI
+                  },
+                  isVirtual: true,
+                  parentStream: baseStream.config.name,
+                  virtualSubject: subject,
+                });
+              } else {
+                console.log(`⏭️  Skipping virtual stream for "${subject}" (0 messages - source may be down)`);
+              }
             }
           }
         } else {
@@ -313,8 +318,8 @@ export class NatsService {
         return [];
       }
 
-      // For EXACT subjects, use consumer (efficient for finding needle in haystack)
-      // For WILDCARDS, use parallel fetch (fast for recent messages)
+      // For EXACT subjects, use last_by_subj (fast when it works)
+      // For WILDCARDS, use parallel fetch
       const isExactSubject = !subject.includes("*") && !subject.includes(">");
 
       if (isExactSubject) {
@@ -323,7 +328,9 @@ export class NatsService {
         try {
           // Use last_by_subj to instantly find the most recent message
           console.log(`🔍 Using last_by_subj API for subject: "${subject}"`);
-          const lastMsg = await this.jsm.streams.getMessage(targetStream, { last_by_subj: subject });
+          const lastMsg = await this.jsm.streams.getMessage(targetStream, {
+            last_by_subj: subject
+          });
 
           console.log(`✅ Found most recent at seq ${lastMsg.seq} with subject "${lastMsg.subject}"`);
 
@@ -399,8 +406,7 @@ export class NatsService {
 
         } catch (err: any) {
           console.error(`❌ last_by_subj failed for "${subject}":`, err.message);
-          console.log(`⚠️ No messages found with exact subject "${subject}"`);
-          console.log(`💡 Tip: Check if subject has wildcards or different format`);
+          console.log(`🔄 Returning empty - subject might not exist or timeout`);
           return [];
         }
       }
@@ -424,7 +430,6 @@ export class NatsService {
 
       console.log(`⚡ Wildcard pattern - parallel fetch: ${fetchCount} messages (seq ${startSeq} to ${endSeq})`);
 
-      // Fetch all in parallel - FAST!
       const fetchPromises = [];
       for (let seq = startSeq; seq <= endSeq; seq++) {
         fetchPromises.push(
@@ -434,13 +439,11 @@ export class NatsService {
 
       const results = await Promise.all(fetchPromises);
 
-      // Filter matching messages
       let skippedForOffset = 0;
       for (const msg of results) {
         if (!msg) continue;
 
         if (this.natsSubjectMatches(msg.subject, subject)) {
-          // Handle offset
           if (skippedForOffset < offset) {
             skippedForOffset++;
             continue;

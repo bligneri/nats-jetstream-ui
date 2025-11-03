@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2025-11-03
+
+### Fixed
+- Removed invalid `timeout` parameter from `getMessage` API call that was causing NATS warnings
+- Fixed undefined `isSourceStream` variable error that broke wildcard pattern queries
+- Message fetching now works reliably with `last_by_subj` for exact subjects and parallel fetch for wildcards
+
+### Changed
+- Simplified NATS connection to use standard URL format with embedded credentials
+- Updated message decorator field extraction to handle SQL NullString/NullInt patterns
+- Improved README documentation for decorator configuration and NATS URL formats
+- Cleaned up leftover source stream handling code
+
+### Added
+- Template file `decorators.config.json.template` with comprehensive configuration examples
+
 ## [0.2.0] - 2025-11-03
 
 ### Added

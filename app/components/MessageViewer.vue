@@ -12,6 +12,7 @@ import { useDebounceFn } from '@vueuse/core';
 const props = defineProps<{
   subjects: string[];
   streamName?: string;
+  serverId?: number;
 }>();
 
 // Convert first subject to a wildcard pattern that will match all messages
@@ -31,7 +32,7 @@ const limit = 50;
 // Load decorators on mount
 onMounted(async () => {
   const { loadDecorators } = await import('~/utils/messageDecorators');
-  decorators.value = await loadDecorators();
+  decorators.value = await loadDecorators(props.serverId);
 });
 
 async function fetchMessages(append = false) {

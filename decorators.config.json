@@ -1,34 +1,78 @@
 {
-  "decorators": [
+  "servers": [
     {
-      "pattern": "commands.dlq.*",
-      "highlightFields": ["serial", "reason", "num_deliveries", "dlq_time"],
-      "fieldLabels": {
-        "serial": "Serial Number",
-        "reason": "Failure Reason",
-        "num_deliveries": "Delivery Attempts",
-        "dlq_time": "DLQ Time"
-      },
-      "color": "red"
+      "id": 1,
+      "name": "Commands",
+      "url": "nats://localhost:4222",
+      "decorators": [
+        {
+          "pattern": "commands.dlq.*",
+          "highlightFields": ["serial", "reason", "num_deliveries", "dlq_time"],
+          "fieldLabels": {
+            "serial": "Serial Number",
+            "reason": "Failure Reason",
+            "num_deliveries": "Delivery Attempts",
+            "dlq_time": "DLQ Time"
+          },
+          "color": "red"
+        },
+        {
+          "pattern": "commands.history.*",
+          "highlightFields": ["serial", "created_at", "worker_identity"],
+          "fieldLabels": {
+            "serial": "Serial Number",
+            "created_at": "Completed At",
+            "worker_identity": "Worker"
+          },
+          "color": "green"
+        },
+        {
+          "pattern": "commands.*",
+          "highlightFields": ["serial", "cmds"],
+          "fieldLabels": {
+            "serial": "Serial Number",
+            "cmds": "Commands"
+          },
+          "color": "blue"
+        }
+      ]
     },
     {
-      "pattern": "commands.history.*",
-      "highlightFields": ["serial", "created_at", "worker_identity"],
-      "fieldLabels": {
-        "serial": "Serial Number",
-        "created_at": "Completed At",
-        "worker_identity": "Worker"
-      },
-      "color": "green"
+      "id": 2,
+      "name": "Hub Aggregate",
+      "url": "nats://localhost:4223",
+      "decorators": [
+        {
+          "pattern": "AggregatedDataEvents.hub_*",
+          "highlightFields": ["serial", "time", "machine_mesh", "avg_temp_fan_top", "avg_humidity_fan_bot"],
+          "fieldLabels": {
+            "serial": "Serial",
+            "time": "Time",
+            "machine_mesh": "Mesh ID",
+            "avg_temp_fan_top": "Temp (Fan Top)",
+            "avg_humidity_fan_bot": "Humidity (Fan Bot)"
+          },
+          "color": "purple"
+        }
+      ]
     },
     {
-      "pattern": "commands.*",
-      "highlightFields": ["serial", "cmds"],
-      "fieldLabels": {
-        "serial": "Serial Number",
-        "cmds": "Commands"
-      },
-      "color": "blue"
+      "id": 3,
+      "name": "CleanData",
+      "url": "nats://localhost:4224",
+      "decorators": [
+        {
+          "pattern": "CleanData.*",
+          "highlightFields": ["serial", "hub_mesh", "control", "mode"],
+          "fieldLabels": {
+            "serial": "Serial",
+            "hub_mesh": "Hub Mesh",
+            "control": "Control",
+            "mode": "Mode"
+          },
+          "color": "yellow"
+        }
+      ]
     }
   ]
 }

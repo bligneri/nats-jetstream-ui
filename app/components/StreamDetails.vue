@@ -11,6 +11,7 @@ import MessageViewer from './MessageViewer.vue';
 
 const props = defineProps<{
   stream: StreamInfo;
+  serverId?: number;
 }>();
 
 const route = useRoute();
@@ -122,6 +123,7 @@ const StreamInfoTab = ({ stream, onNavigateToParent }: { stream: StreamInfo; onN
           <MessageViewer
             :subjects="stream.config.subjects.length > 0 ? stream.config.subjects : [stream.virtualSubject || '>']"
             :stream-name="stream.config.name"
+            :server-id="serverId"
           />
         </div>
       </div>
