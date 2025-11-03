@@ -1,0 +1,91 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [0.1.0] - 2025-01-02
+
+### Added
+
+#### NATS Integration
+- Real NATS JetStream client integration (nats.js v2.29.3) replacing all mock data
+- Server-side connection persistence with automatic reconnection on page navigation
+- Connection details stored server-side in singleton natsService
+- New API endpoints:
+  - `/api/connection-status` - Check server-side connection state
+  - `/api/connection-info` - Get current connection details
+  - `/api/disconnect` - Disconnect from NATS server
+  - `/api/decorators` - Load message field decorators
+- Middleware to verify server-side connection before accessing dashboard
+
+#### Message Viewer
+- Message viewer component with advanced subject filtering
+- Support for NATS wildcard patterns (`*` for single token, `>` for multiple levels)
+- Support for exact subject matching
+- Debounced subject input (500ms delay) to prevent query spam while typing
+- Clickable subjects in message cards to instantly filter by exact subject
+- Pagination with "Load More" button for browsing historical messages
+- Intelligent search for exact subjects:
+  - Uses `last_by_subj` API for instant lookup of most recent message
+  - Searches backwards 50k messages in parallel to find more matches
+  - Returns immediately without waiting to collect full page
+- Wildcard pattern search fetches most recent 500 messages in parallel
+- Messages sorted newest first by default
+
+#### Message Display
+- Decorator system for highlighting important fields per subject pattern
+  - Configured via `decorators.config.json` file (no UI needed)
+  - Pattern matching with wildcards (e.g., `commands.dlq.*`)
+  - Custom field labels and color coding
+  - Important fields displayed at card level (not hidden in expanded view)
+- JSON syntax highlighting with color-coded keys, strings, numbers, booleans, nulls
+- Custom CSS classes: `.json-key`, `.json-string`, `.json-number`, `.json-boolean`, `.json-null`
+- Relative timestamps for better readability:
+  - "Just now" for <60 seconds
+  - "3m ago" for <60 minutes
+  - "3h ago" for <24 hours
+  - "Today", "Yesterday" for date
+  - Day name for <7 days
+  - Short date for older
+- Collapsible message cards with expand/collapse icons
+- Full message data displayed in properly formatted `<pre><code>` blocks
+- Message headers shown when present
+
+#### User Experience
+- URL state management for shareable links
+  - Stream selection persisted in `?stream=NAME`
+  - Tab selection persisted in `?tab=messages`
+- Dark background set from HTML level to prevent flash
+- Disabled page transitions for smoother navigation
+- Conditional rendering with loading states
+- Auto-connect flow with proper loading indicators
+- Disconnect button to switch between NATS servers
+- Query parameter `?disconnected=true` to prevent auto-connect after manual disconnect
+
+### Changed
+- Message fetching uses parallel `Promise.all()` requests instead of sequential
+- Exact subject queries optimized with NATS `last_by_subj` API for instant lookup
+- Wildcard patterns use parallel batch fetching (500 messages) instead of one-by-one
+- Connection check moved to server-side middleware (no client-side state needed)
+- Server URL displayed in header fetched from server API
+- Highlighted decorator fields moved from expanded view to card header
+- Sequence number and subject shown as secondary info below highlighted fields
+
+### Fixed
+- Message loading performance for streams with millions of messages (tested with 374M messages)
+- Subject filtering bug where patterns weren't matching correctly
+- NATS pattern matching now uses proper wildcard conversion (`*` → `[^.]+`, `>` → `.*`)
+- Loading screen flash during auto-connect by setting dark background early
+- Connection persistence across page navigation with server-side storage
+- Messages now return newest first instead of oldest first
+- JSON display formatting (was compressed on one line, now properly indented)
+- Race condition in connection state by adding `isConnecting` flag
+- Client-side composable errors in middleware by using `defineNuxtRouteMiddleware`
+- Variable reassignment errors by changing `const messages` to `let messages`
+
+### Technical Details
+- Parallel message fetching: Fetches up to 50,000 messages simultaneously using `Promise.all()`
+- For exact subjects: `last_by_subj` → search 50k backwards → return immediately
+- For wildcards: fetch recent 500 messages → filter client-side → return
+- Auto-reconnect: `ensureConnected()` called before each operation
+- Debounce implementation using `@vueuse/core` `useDebounceFn()`
+- Connection singleton persists across Nuxt server hot reloads in development

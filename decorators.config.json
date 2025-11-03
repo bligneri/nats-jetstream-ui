@@ -1,0 +1,34 @@
+{
+  "decorators": [
+    {
+      "pattern": "commands.dlq.*",
+      "highlightFields": ["serial", "reason", "num_deliveries", "dlq_time"],
+      "fieldLabels": {
+        "serial": "Serial Number",
+        "reason": "Failure Reason",
+        "num_deliveries": "Delivery Attempts",
+        "dlq_time": "DLQ Time"
+      },
+      "color": "red"
+    },
+    {
+      "pattern": "commands.history.*",
+      "highlightFields": ["serial", "created_at", "worker_identity"],
+      "fieldLabels": {
+        "serial": "Serial Number",
+        "created_at": "Completed At",
+        "worker_identity": "Worker"
+      },
+      "color": "green"
+    },
+    {
+      "pattern": "commands.*",
+      "highlightFields": ["serial", "cmds"],
+      "fieldLabels": {
+        "serial": "Serial Number",
+        "cmds": "Commands"
+      },
+      "color": "blue"
+    }
+  ]
+}

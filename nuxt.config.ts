@@ -5,11 +5,22 @@ export default defineNuxtConfig({
   compatibilityDate: "2025-07-15",
   devtools: { enabled: true },
   css: ["~/assets/css/main.css"],
+  runtimeConfig: {
+    public: {
+      natsUrl: process.env.NUXT_PUBLIC_NATS_URL || '',
+      natsUser: process.env.NUXT_PUBLIC_NATS_USER || '',
+      natsPassword: process.env.NUXT_PUBLIC_NATS_PASSWORD || '',
+    },
+  },
   app: {
     head: {
       title: "NATS JetStream Explorer",
       htmlAttrs: {
         lang: "en",
+        class: "bg-slate-900",
+      },
+      bodyAttrs: {
+        class: "bg-slate-900",
       },
       meta: [
         { charset: "utf-8" },
@@ -22,6 +33,8 @@ export default defineNuxtConfig({
       ],
       link: [{ rel: "icon", type: "image/svg+xml", href: "/favicon.ico" }],
     },
+    pageTransition: false,
+    layoutTransition: false,
   },
   modules: ["@nuxt/image", "@nuxt/test-utils"],
   nitro: {

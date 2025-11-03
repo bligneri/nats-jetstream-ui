@@ -1,4 +1,11 @@
 import {
+  connect,
+  type NatsConnection,
+  type JetStreamManager,
+  type JetStreamClient,
+  StringCodec,
+} from "nats";
+import {
   NatsConnectionDetails,
   StreamInfo,
   ConsumerInfo,
@@ -8,200 +15,539 @@ import {
   AckPolicy,
 } from "~/types";
 
-// Mock Data
-const mockStreams: StreamInfo[] = [
-  {
-    config: {
-      name: "ORDERS",
-      subjects: ["ORDERS.*"],
-      retention: RetentionPolicy.Limits,
-      max_consumers: -1,
-      max_msgs: 1000000,
-      max_bytes: 1073741824,
-      max_age: 0,
-      storage: StorageType.File,
-      num_replicas: 1,
-    },
-    state: {
-      messages: 1256,
-      bytes: 876543,
-      first_seq: 1,
-      last_seq: 1256,
-      consumer_count: 2,
-    },
-    created: new Date(Date.now() - 86400000 * 5).toISOString(),
-  },
-  {
-    config: {
-      name: "EVENTS",
-      subjects: ["EVENTS.eu-west-1.*", "EVENTS.us-east-1.*"],
-      retention: RetentionPolicy.Interest,
-      max_consumers: -1,
-      max_msgs: -1,
-      max_bytes: -1,
-      max_age: 604800000000000, // 1 week in ns
-      storage: StorageType.Memory,
-      num_replicas: 3,
-    },
-    state: {
-      messages: 8432,
-      bytes: 4567890,
-      first_seq: 2001,
-      last_seq: 10433,
-      consumer_count: 1,
-    },
-    created: new Date(Date.now() - 86400000 * 2).toISOString(),
-  },
-  {
-    config: {
-      name: "ANALYTICS",
-      subjects: ["ANALYTICS.ingest.>", "ANALYTICS.processed.tier1"],
-      retention: RetentionPolicy.WorkQueue,
-      max_consumers: 5,
-      max_msgs: 5000,
-      max_bytes: 52428800,
-      max_age: 0,
-      storage: StorageType.File,
-      num_replicas: 1,
-    },
-    state: {
-      messages: 489,
-      bytes: 123456,
-      first_seq: 1,
-      last_seq: 489,
-      consumer_count: 3,
-    },
-    created: new Date().toISOString(),
-  },
-];
-
-const mockConsumers: { [streamName: string]: ConsumerInfo[] } = {
-  ORDERS: [
-    {
-      stream_name: "ORDERS",
-      name: "order-processor",
-      config: {
-        durable_name: "order-processor",
-        ack_policy: AckPolicy.Explicit,
-        ack_wait: 30000000000,
-        max_deliver: 5,
-        filter_subject: "ORDERS.created",
-        replay_policy: "instant",
-      },
-      created: new Date().toISOString(),
-      num_ack_pending: 5,
-      num_redelivered: 1,
-      num_waiting: 10,
-    },
-    {
-      stream_name: "ORDERS",
-      name: "order-auditor",
-      config: {
-        durable_name: "order-auditor",
-        ack_policy: AckPolicy.All,
-        ack_wait: 60000000000,
-        max_deliver: -1,
-        filter_subject: "ORDERS.*",
-        replay_policy: "original",
-      },
-      created: new Date(Date.now() - 86400000).toISOString(),
-      num_ack_pending: 0,
-      num_redelivered: 0,
-      num_waiting: 0,
-    },
-  ],
-  EVENTS: [
-    {
-      stream_name: "EVENTS",
-      name: "realtime-dashboard",
-      config: {
-        ack_policy: AckPolicy.None,
-        ack_wait: 0,
-        max_deliver: 1,
-        filter_subject: "EVENTS.eu-west-1.>",
-        replay_policy: "instant",
-      },
-      created: new Date().toISOString(),
-      num_ack_pending: 0,
-      num_redelivered: 0,
-      num_waiting: 120,
-    },
-  ],
-  ANALYTICS: [],
-};
-
-const mockMessages: { [subject: string]: NatsMessage[] } = {
-  "ORDERS.created": Array.from({ length: 50 }, (_, i) => ({
-    seq: 1256 - i,
-    subject: "ORDERS.created",
-    data: Buffer.from(
-      JSON.stringify({
-        orderId: `ORD-${1256 - i}`,
-        amount: (Math.random() * 100).toFixed(2),
-        currency: "USD",
-      }),
-    ).toString("base64"),
-    headers: {
-      "Content-Type": ["application/json"],
-      "Trace-Id": [`trace-${Math.random().toString(36).substr(2, 9)}`],
-    },
-    time: new Date(Date.now() - i * 5000).toISOString(),
-  })),
-  "ORDERS.*": Array.from({ length: 50 }, (_, i) => ({
-    seq: 1256 - i,
-    subject: "ORDERS.created",
-    data: Buffer.from(
-      JSON.stringify({
-        orderId: `ORD-${1256 - i}`,
-        amount: (Math.random() * 100).toFixed(2),
-        currency: "USD",
-      }),
-    ).toString("base64"),
-    headers: {
-      "Content-Type": ["application/json"],
-      "Trace-Id": [`trace-${Math.random().toString(36).substr(2, 9)}`],
-    },
-    time: new Date(Date.now() - i * 5000).toISOString(),
-  })),
-  "EVENTS.eu-west-1.*": Array.from({ length: 20 }, (_, i) => ({
-    seq: 10433 - i,
-    subject: "EVENTS.eu-west-1.user_login",
-    data: Buffer.from(
-      JSON.stringify({ userId: `user-${100 + i}`, ip: `192.168.1.${i}` }),
-    ).toString("base64"),
-    time: new Date(Date.now() - i * 2000).toISOString(),
-  })),
-  "ANALYTICS.ingest.*": [],
-};
-
-const simulateDelay = <T>(data: T, delay = 500): Promise<T> =>
-  new Promise((resolve) => setTimeout(() => resolve(data), delay));
-
-const simulateError = (message: string, delay = 500): Promise<never> =>
-  new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(message)), delay),
-  );
-
 export class NatsService {
-  connect(details: NatsConnectionDetails): Promise<void> {
-    console.log("Attempting to connect with:", details);
-    if (details.serverUrl.includes("fail")) {
-      return simulateError("Connection failed: Invalid server credentials.");
+  private nc: NatsConnection | null = null;
+  private jsm: JetStreamManager | null = null;
+  private js: JetStreamClient | null = null;
+  private connectionDetails: NatsConnectionDetails | null = null;
+  private isConnecting: boolean = false;
+
+  async connect(details: NatsConnectionDetails): Promise<void> {
+    try {
+      this.isConnecting = true;
+      console.log("🔌 Connecting to NATS:", details.serverUrl);
+
+      // Close existing connection if any
+      if (this.nc) {
+        console.log("🔌 Closing existing connection...");
+        await this.nc.close();
+        this.nc = null;
+        this.jsm = null;
+        this.js = null;
+      }
+
+      // Store connection details BEFORE connecting so we can reconnect later
+      this.connectionDetails = details;
+
+      // Connect to NATS
+      this.nc = await connect({
+        servers: details.serverUrl,
+        user: details.user,
+        pass: details.password,
+      });
+
+      console.log("🔌 Getting JetStream manager...");
+      // Initialize JetStream manager and client
+      this.jsm = await this.nc.jetstreamManager();
+      this.js = this.nc.jetstream();
+      this.isConnecting = false;
+
+      console.log("✅ Connected to NATS JetStream successfully");
+      console.log(`✅ Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}`);
+    } catch (error) {
+      console.error("❌ Failed to connect to NATS:", error);
+      this.nc = null;
+      this.jsm = null;
+      this.js = null;
+      this.connectionDetails = null;
+      this.isConnecting = false;
+      throw new Error(
+        `Connection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     }
-    return simulateDelay(undefined, 1000);
   }
 
-  getStreams(): Promise<StreamInfo[]> {
-    return simulateDelay(mockStreams);
+  private async ensureConnected(): Promise<void> {
+    // If already connected, nothing to do
+    if (this.isConnected()) {
+      return;
+    }
+
+    // If we have connection details but no connection, try to reconnect
+    if (this.connectionDetails && !this.isConnecting) {
+      console.log("🔄 Auto-reconnecting to NATS...");
+      await this.connect(this.connectionDetails);
+      return;
+    }
+
+    // No connection and no details stored
+    throw new Error("Not connected to NATS. Call connect() first.");
   }
 
-  getConsumers(streamName: string): Promise<ConsumerInfo[]> {
-    return simulateDelay(mockConsumers[streamName] || []);
+  isConnected(): boolean {
+    return this.nc !== null && this.jsm !== null && this.js !== null && !this.isConnecting;
   }
 
-  getMessages(subject: string): Promise<NatsMessage[]> {
-    return simulateDelay(mockMessages[subject] || []);
+  hasConnectionDetails(): boolean {
+    return this.connectionDetails !== null;
+  }
+
+  getConnectionInfo(): NatsConnectionDetails | null {
+    return this.connectionDetails;
+  }
+
+  async getStreams(): Promise<StreamInfo[]> {
+    console.log(`📊 getStreams called - Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}, isConnecting=${this.isConnecting}`);
+
+    await this.ensureConnected();
+
+    try {
+      const streams: StreamInfo[] = [];
+      const streamsList = await this.jsm.streams.list().next();
+
+      for await (const streamInfo of streamsList) {
+        // Map NATS stream info to our types
+        const retention = this.mapRetentionPolicy(streamInfo.config.retention);
+        const storage = this.mapStorageType(streamInfo.config.storage);
+
+        streams.push({
+          config: {
+            name: streamInfo.config.name,
+            subjects: streamInfo.config.subjects || [],
+            retention,
+            max_consumers: streamInfo.config.max_consumers ?? -1,
+            max_msgs: streamInfo.config.max_msgs ?? -1,
+            max_bytes: streamInfo.config.max_bytes ?? -1,
+            max_age: streamInfo.config.max_age ?? 0,
+            storage,
+            num_replicas: streamInfo.config.num_replicas ?? 1,
+          },
+          state: {
+            messages: streamInfo.state.messages,
+            bytes: streamInfo.state.bytes,
+            first_seq: streamInfo.state.first_seq,
+            last_seq: streamInfo.state.last_seq,
+            consumer_count: streamInfo.state.consumer_count,
+          },
+          created: streamInfo.created,
+        });
+      }
+
+      console.log(`📊 Found ${streams.length} streams`);
+      return streams;
+    } catch (error) {
+      console.error("Failed to get streams:", error);
+      throw new Error(
+        `Failed to fetch streams: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  async getConsumers(streamName: string): Promise<ConsumerInfo[]> {
+    await this.ensureConnected();
+
+    try {
+      const consumers: ConsumerInfo[] = [];
+      const consumersList = await this.jsm.consumers.list(streamName).next();
+
+      for await (const consumerInfo of consumersList) {
+        const ackPolicy = this.mapAckPolicy(consumerInfo.config.ack_policy);
+
+        consumers.push({
+          stream_name: streamName,
+          name: consumerInfo.name,
+          config: {
+            durable_name: consumerInfo.config.durable_name,
+            ack_policy: ackPolicy,
+            ack_wait: consumerInfo.config.ack_wait ?? 0,
+            max_deliver: consumerInfo.config.max_deliver ?? -1,
+            filter_subject: consumerInfo.config.filter_subject || "",
+            replay_policy: consumerInfo.config.replay_policy || "instant",
+          },
+          created: consumerInfo.created,
+          num_ack_pending: consumerInfo.num_ack_pending ?? 0,
+          num_redelivered: consumerInfo.num_redelivered ?? 0,
+          num_waiting: consumerInfo.num_waiting ?? 0,
+        });
+      }
+
+      console.log(`👥 Found ${consumers.length} consumers for stream ${streamName}`);
+      return consumers;
+    } catch (error) {
+      console.error(`Failed to get consumers for ${streamName}:`, error);
+      throw new Error(
+        `Failed to fetch consumers: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  async getMessages(subject: string, limit: number = 50, offset: number = 0): Promise<NatsMessage[]> {
+    console.log(`📨 getMessages called for subject="${subject}" - Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}, isConnecting=${this.isConnecting}`);
+
+    await this.ensureConnected();
+
+    try {
+      let messages: NatsMessage[] = [];
+
+      // Find stream that contains this subject
+      const streamsList = await this.jsm.streams.list().next();
+      let targetStream: string | null = null;
+
+      for await (const streamInfo of streamsList) {
+        const subjects = streamInfo.config.subjects || [];
+        // Check if subject pattern could match stream subjects
+        // For example, if looking for "CleanData.*.0x123", check if stream has "CleanData.>"
+        if (subjects.some((s) => this.couldMatchStream(subject, s))) {
+          targetStream = streamInfo.config.name;
+          console.log(`📊 Found stream ${targetStream} with subjects: ${subjects.join(', ')}`);
+          break;
+        }
+      }
+
+      if (!targetStream) {
+        console.log(`⚠️  No stream found for subject pattern: ${subject}`);
+        return [];
+      }
+
+      // For EXACT subjects, use consumer (efficient for finding needle in haystack)
+      // For WILDCARDS, use parallel fetch (fast for recent messages)
+      const isExactSubject = !subject.includes("*") && !subject.includes(">");
+
+      if (isExactSubject) {
+        console.log(`⚡ Exact subject - using last_by_subj for instant lookup`);
+
+        try {
+          // Use last_by_subj to instantly find the most recent message
+          console.log(`🔍 Using last_by_subj API for subject: "${subject}"`);
+          const lastMsg = await this.jsm.streams.getMessage(targetStream, { last_by_subj: subject });
+
+          console.log(`✅ Found most recent at seq ${lastMsg.seq} with subject "${lastMsg.subject}"`);
+
+          // Add the first message (most recent)
+          const headers: { [key: string]: string[] } = {};
+          if (lastMsg.headers) {
+            for (const [key, values] of lastMsg.headers) {
+              headers[key] = Array.isArray(values) ? values : [values];
+            }
+          }
+
+          messages.push({
+            seq: lastMsg.seq,
+            subject: lastMsg.subject,
+            data: Buffer.from(lastMsg.data).toString("base64"),
+            headers: Object.keys(headers).length > 0 ? headers : undefined,
+            time: lastMsg.time,
+          });
+
+          // Only search backwards if user wants more than 1 message
+          if (limit > 1) {
+            // Search a reasonable range quickly - don't wait to find all 50!
+            // Just search 50k messages and return whatever we find
+            const searchRange = 50000;
+            const endSeq = lastMsg.seq - 1;
+            const startSeq = Math.max(1, endSeq - searchRange + 1);
+
+            console.log(`🔍 Searching ${searchRange} messages (seq ${startSeq} to ${endSeq})`);
+
+            const fetchPromises = [];
+            for (let seq = endSeq; seq >= startSeq; seq--) {
+              fetchPromises.push(
+                this.jsm.streams.getMessage(targetStream, { seq }).catch(() => null)
+              );
+            }
+
+            const results = await Promise.all(fetchPromises);
+
+            for (const msg of results) {
+              if (!msg || msg.subject !== subject) continue;
+
+              const msgHeaders: { [key: string]: string[] } = {};
+              if (msg.headers) {
+                for (const [key, values] of msg.headers) {
+                  msgHeaders[key] = Array.isArray(values) ? values : [values];
+                }
+              }
+
+              messages.push({
+                seq: msg.seq,
+                subject: msg.subject,
+                data: Buffer.from(msg.data).toString("base64"),
+                headers: Object.keys(msgHeaders).length > 0 ? msgHeaders : undefined,
+                time: msg.time,
+              });
+
+              // Stop at limit to avoid over-fetching
+              if (messages.length >= limit) break;
+            }
+
+            console.log(`📊 Found ${messages.length - 1} more matches in 50k range (total: ${messages.length})`);
+          }
+
+          // Sort newest first
+          messages.sort((a, b) => b.seq - a.seq);
+
+          // Don't slice - we already have the right amount
+          // Just limit to the requested amount
+          messages = messages.slice(0, limit);
+
+          console.log(`📨 Returning ${messages.length} messages for exact subject (searched 10k range)`);
+          return messages;
+
+        } catch (err: any) {
+          console.error(`❌ last_by_subj failed for "${subject}":`, err.message);
+          console.log(`⚠️ No messages found with exact subject "${subject}"`);
+          console.log(`💡 Tip: Check if subject has wildcards or different format`);
+          return [];
+        }
+      }
+
+      // For WILDCARD patterns, fetch recent messages and filter
+      const streamInfo = await this.jsm.streams.info(targetStream);
+      const lastSeq = streamInfo.state.last_seq;
+      const firstSeq = streamInfo.state.first_seq;
+
+      if (lastSeq === 0 || firstSeq === 0) {
+        console.log(`⚠️  Stream is empty`);
+        return [];
+      }
+
+      console.log(`📊 Stream ${targetStream}: seq ${firstSeq} to ${lastSeq}`);
+
+      // Fetch most recent messages in parallel (limit * 10 to account for filtering)
+      const fetchCount = Math.min(limit * 10, 500);
+      const endSeq = lastSeq - offset;
+      const startSeq = Math.max(firstSeq, endSeq - fetchCount + 1);
+
+      console.log(`⚡ Wildcard pattern - parallel fetch: ${fetchCount} messages (seq ${startSeq} to ${endSeq})`);
+
+      // Fetch all in parallel - FAST!
+      const fetchPromises = [];
+      for (let seq = startSeq; seq <= endSeq; seq++) {
+        fetchPromises.push(
+          this.jsm.streams.getMessage(targetStream, { seq }).catch(() => null)
+        );
+      }
+
+      const results = await Promise.all(fetchPromises);
+
+      // Filter matching messages
+      let skippedForOffset = 0;
+      for (const msg of results) {
+        if (!msg) continue;
+
+        if (this.natsSubjectMatches(msg.subject, subject)) {
+          // Handle offset
+          if (skippedForOffset < offset) {
+            skippedForOffset++;
+            continue;
+          }
+
+          const headers: { [key: string]: string[] } = {};
+          if (msg.headers) {
+            for (const [key, values] of msg.headers) {
+              headers[key] = Array.isArray(values) ? values : [values];
+            }
+          }
+
+          messages.push({
+            seq: msg.seq,
+            subject: msg.subject,
+            data: Buffer.from(msg.data).toString("base64"),
+            headers: Object.keys(headers).length > 0 ? headers : undefined,
+            time: msg.time,
+          });
+
+          if (messages.length >= limit) {
+            break;
+          }
+        }
+      }
+
+      // Sort by sequence number, newest first
+      messages.sort((a, b) => b.seq - a.seq);
+
+      console.log(`📨 Returning ${messages.length} messages for wildcard pattern`);
+      return messages;
+    } catch (error) {
+      console.error(`Failed to get messages for ${subject}:`, error);
+      return [];
+    }
+  }
+
+  // Legacy method - fallback for when consumer method fails
+  private async getMessagesLegacy(subject: string, limit: number = 50, offset: number = 0): Promise<NatsMessage[]> {
+    console.log(`⚠️  Using legacy message fetch method for ${subject}`);
+
+    const messages: NatsMessage[] = [];
+
+    // Find stream that contains this subject
+    const streamsList = await this.jsm!.streams.list().next();
+    let targetStream: string | null = null;
+
+    for await (const streamInfo of streamsList) {
+      const subjects = streamInfo.config.subjects || [];
+      if (subjects.some((s) => this.couldMatchStream(subject, s))) {
+        targetStream = streamInfo.config.name;
+        break;
+      }
+    }
+
+    if (!targetStream) {
+      return [];
+    }
+
+    // Get stream info
+    const streamInfo = await this.jsm!.streams.info(targetStream);
+    const lastSeq = streamInfo.state.last_seq;
+    const firstSeq = streamInfo.state.first_seq;
+
+    if (lastSeq === 0 || firstSeq === 0) {
+      return [];
+    }
+
+    // Calculate sequence range - but we need to fetch ALL and filter :(
+    // This is inefficient but works as fallback
+    const maxFetch = Math.min(limit * 10, 500); // Fetch more to account for filtering
+    const endSeq = lastSeq - offset;
+    const startSeq = Math.max(firstSeq, endSeq - maxFetch + 1);
+
+    console.log(`🔍 Legacy fetch: seq ${startSeq} to ${endSeq}`);
+
+    // Fetch messages in parallel
+    const fetchPromises = [];
+    for (let seq = startSeq; seq <= endSeq && fetchPromises.length < maxFetch; seq++) {
+      fetchPromises.push(
+        this.jsm!.streams.getMessage(targetStream, { seq }).catch(() => null)
+      );
+    }
+
+    const results = await Promise.all(fetchPromises);
+
+    // Filter by subject
+    for (const msg of results) {
+      if (!msg) continue;
+
+      if (!this.natsSubjectMatches(msg.subject, subject)) {
+        continue;
+      }
+
+      const headers: { [key: string]: string[] } = {};
+      if (msg.headers) {
+        for (const [key, values] of msg.headers) {
+          headers[key] = Array.isArray(values) ? values : [values];
+        }
+      }
+
+      messages.push({
+        seq: msg.seq,
+        subject: msg.subject,
+        data: Buffer.from(msg.data).toString("base64"),
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        time: msg.time,
+      });
+
+      if (messages.length >= limit) {
+        break;
+      }
+    }
+
+    messages.sort((a, b) => b.seq - a.seq);
+    return messages;
+  }
+
+  // Helper methods to map NATS types to our enums
+  private mapRetentionPolicy(retention: string): RetentionPolicy {
+    switch (retention) {
+      case "limits":
+        return RetentionPolicy.Limits;
+      case "interest":
+        return RetentionPolicy.Interest;
+      case "workqueue":
+        return RetentionPolicy.WorkQueue;
+      default:
+        return RetentionPolicy.Limits;
+    }
+  }
+
+  private mapStorageType(storage: string): StorageType {
+    switch (storage) {
+      case "file":
+        return StorageType.File;
+      case "memory":
+        return StorageType.Memory;
+      default:
+        return StorageType.File;
+    }
+  }
+
+  private mapAckPolicy(ackPolicy: string): AckPolicy {
+    switch (ackPolicy) {
+      case "none":
+        return AckPolicy.None;
+      case "all":
+        return AckPolicy.All;
+      case "explicit":
+        return AckPolicy.Explicit;
+      default:
+        return AckPolicy.Explicit;
+    }
+  }
+
+  // NATS-style subject matching (supports * and >)
+  private natsSubjectMatches(subject: string, pattern: string): boolean {
+    // Exact match
+    if (subject === pattern) {
+      return true;
+    }
+
+    // No wildcards = exact match required
+    if (!pattern.includes("*") && !pattern.includes(">")) {
+      return false;
+    }
+
+    // Convert NATS wildcards to regex
+    // * matches exactly one token (non-empty)
+    // > matches one or more tokens (can be multiple levels)
+    const regexPattern = pattern
+      .replace(/\./g, "\\.")  // Escape dots
+      .replace(/\*/g, "[^.]+")  // * = one token
+      .replace(/>/g, ".*");      // > = rest of subject
+
+    const regex = new RegExp(`^${regexPattern}$`);
+    return regex.test(subject);
+  }
+
+  // Check if a user query pattern could match messages in a stream
+  private couldMatchStream(queryPattern: string, streamSubject: string): boolean {
+    // If stream subject is broader (has >), it could contain our pattern
+    if (streamSubject.includes(">")) {
+      const streamPrefix = streamSubject.replace(/>$/, "");
+      return queryPattern.startsWith(streamPrefix) || streamSubject.startsWith(queryPattern.split(".")[0]);
+    }
+
+    // If stream subject has *, check if patterns are compatible
+    if (streamSubject.includes("*")) {
+      return this.natsSubjectMatches(queryPattern, streamSubject) ||
+             this.natsSubjectMatches(streamSubject, queryPattern);
+    }
+
+    // Exact or partial match
+    return streamSubject === queryPattern ||
+           this.natsSubjectMatches(queryPattern, streamSubject);
+  }
+
+  async disconnect(): Promise<void> {
+    console.log("🔌 Disconnecting from NATS...");
+    if (this.nc) {
+      await this.nc.close();
+    }
+    this.nc = null;
+    this.jsm = null;
+    this.js = null;
+    this.connectionDetails = null;
+    console.log("✅ Disconnected from NATS");
   }
 }
 
+// Export singleton instance
 export const natsService = new NatsService();

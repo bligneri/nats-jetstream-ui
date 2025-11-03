@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, h } from 'vue';
+import { ref, h, watch } from 'vue';
 import type { StreamInfo } from '~/types';
 import UiTabs from './ui/Tabs.vue';
 import type { Tab } from './ui/Tabs.vue';
@@ -13,7 +13,16 @@ const props = defineProps<{
   stream: StreamInfo;
 }>();
 
-const activeTab = ref('info');
+const route = useRoute();
+const router = useRouter();
+
+// Initialize tab from URL or default to 'info'
+const activeTab = ref((route.query.tab as string) || 'info');
+
+// Watch for tab changes and update URL
+watch(activeTab, (newTab) => {
+  router.push({ query: { ...route.query, tab: newTab } });
+});
 
 const tabs: Tab[] = [
   { id: 'info', label: 'Info', icon: () => h(InfoIcon, { class: 'h-5 w-5' }) },

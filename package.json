@@ -1,5 +1,6 @@
 {
   "name": "nats-jetstream-ui",
+  "version": "0.1.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -12,6 +13,8 @@
   "dependencies": {
     "@nuxt/image": "1.11.0",
     "@nuxt/test-utils": "3.19.2",
+    "@vueuse/core": "^14.0.0",
+    "nats": "^2.29.3",
     "nuxt": "^4.0.3",
     "vue": "^3.5.18",
     "vue-router": "^4.5.1"

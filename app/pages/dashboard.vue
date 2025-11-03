@@ -10,29 +10,51 @@ import { definePageMeta } from "#imports";
 
 definePageMeta({
     middleware: [
-        function () {
-            const { connection } = useNatsConnection();
-            if (!connection.value) {
+        defineNuxtRouteMiddleware(async (to, from) => {
+            // Check server-side connection status
+            try {
+                const status = await $fetch<{ connected: boolean; hasConnectionDetails: boolean }>('/api/connection-status');
+                if (!status.hasConnectionDetails) {
+                    return navigateTo("/");
+                }
+            } catch (error) {
+                console.error('Failed to check connection status:', error);
                 return navigateTo("/");
             }
-        },
+        }),
     ],
 });
 
-const { connection, setConnection } = useNatsConnection();
+const { setConnection } = useNatsConnection();
 const router = useRouter();
+const route = useRoute();
 
 const streams = ref<StreamInfo[]>([]);
 const selectedStream = ref<StreamInfo>();
 const isLoading = ref(true);
+const serverUrl = ref<string>(''); // Will be fetched from server
 
 onMounted(async () => {
     isLoading.value = true;
     try {
-        const fetchedStreams = await $fetch<StreamInfo[]>("/api/streams");
+        // Fetch connection info and streams in parallel
+        const [connectionInfo, fetchedStreams] = await Promise.all([
+            $fetch<{ serverUrl: string }>('/api/connection-info'),
+            $fetch<StreamInfo[]>("/api/streams")
+        ]);
+
+        serverUrl.value = connectionInfo.serverUrl;
         streams.value = fetchedStreams;
-        if (fetchedStreams.length > 0) {
+
+        // Check URL for stream parameter
+        const streamParam = route.query.stream as string;
+        if (streamParam) {
+            const stream = fetchedStreams.find(s => s.config.name === streamParam);
+            selectedStream.value = stream || fetchedStreams[0];
+        } else if (fetchedStreams.length > 0) {
             selectedStream.value = fetchedStreams[0];
+            // Set URL param for default stream
+            router.replace({ query: { stream: fetchedStreams[0].config.name } });
         }
     } catch (error) {
         console.error("Failed to fetch streams:", error);
@@ -43,11 +65,20 @@ onMounted(async () => {
 
 const handleSelectStream = (stream: StreamInfo) => {
     selectedStream.value = stream;
+    // Update URL with selected stream
+    router.push({ query: { ...route.query, stream: stream.config.name } });
 };
 
-const handleDisconnect = () => {
+const handleDisconnect = async () => {
     setConnection(null);
-    router.push("/");
+    // Disconnect from NATS server
+    try {
+        await $fetch('/api/disconnect', { method: 'POST' });
+    } catch (error) {
+        console.error('Failed to disconnect:', error);
+    }
+    // Redirect to connection page with query param to show form
+    router.push("/?disconnected=true");
 };
 </script>
 
@@ -66,7 +97,7 @@ const handleDisconnect = () => {
                 <div class="text-sm text-slate-400">
                     Connected to
                     <span class="font-mono text-green-400">{{
-                        connection?.serverUrl
+                        serverUrl
                     }}</span>
                 </div>
                 <button
