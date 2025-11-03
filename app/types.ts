@@ -39,12 +39,18 @@ export interface StreamState {
   first_seq: number;
   last_seq: number;
   consumer_count: number;
+  first_ts?: string; // ISO date string - timestamp of first message
+  last_ts?: string; // ISO date string - timestamp of last message
 }
 
 export interface StreamInfo {
   config: StreamConfig;
   state: StreamState;
   created: string; // ISO date string
+  // Virtual stream metadata (for source streams expanded by subject patterns)
+  isVirtual?: boolean;
+  parentStream?: string;
+  virtualSubject?: string;
 }
 
 export interface ConsumerConfig {

@@ -11,6 +11,7 @@ import { useDebounceFn } from '@vueuse/core';
 
 const props = defineProps<{
   subjects: string[];
+  streamName?: string;
 }>();
 
 // Convert first subject to a wildcard pattern that will match all messages
@@ -53,6 +54,7 @@ async function fetchMessages(append = false) {
         subject: debouncedSubject.value,
         limit: limit.toString(),
         offset: offset.value.toString(),
+        stream: props.streamName,
       },
     });
 

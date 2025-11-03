@@ -96,6 +96,62 @@ export class NatsService {
     return this.connectionDetails;
   }
 
+  /**
+   * Detect subject patterns from a source stream by getting subjects directly from stream info
+   * Returns a map of subject -> message count
+   */
+  private async detectSubjectPatterns(streamName: string, sampleSize: number = 200): Promise<Map<string, number>> {
+    const startTime = Date.now();
+    try {
+      console.log(`🔍 [${streamName}] Starting fast pattern detection using stream subjects...`);
+
+      // Get stream info which includes subject details
+      const streamInfo = await this.jsm.streams.info(streamName, { subjects_filter: '>' });
+
+      const subjectMap = new Map<string, number>();
+
+      // Check if stream has subject details
+      if (streamInfo.state.subjects) {
+        console.log(`🔍 [${streamName}] Found ${Object.keys(streamInfo.state.subjects).length} unique subjects in stream state`);
+
+        // Use the full exact subject with message counts
+        for (const [subject, count] of Object.entries(streamInfo.state.subjects)) {
+          subjectMap.set(subject, count);
+        }
+      } else {
+        console.log(`⚠️ [${streamName}] No subject details in stream state, falling back to message sampling...`);
+
+        // Fallback: sample messages (no accurate counts available)
+        const consumer = await this.js.consumers.get(streamName, {
+          deliver_policy: 'last_per_subject',
+          filter_subject: '>',
+        });
+
+        const iter = await consumer.fetch({ max_messages: sampleSize, expires: 5000 });
+        let count = 0;
+
+        for await (const msg of iter) {
+          if (msg.subject) {
+            // Use full subject as pattern (count unknown, set to 1)
+            subjectMap.set(msg.subject, subjectMap.get(msg.subject) || 1);
+            count++;
+          }
+        }
+        console.log(`🔍 [${streamName}] Sampled ${count} messages`);
+      }
+
+      const totalTime = Date.now() - startTime;
+      console.log(`✅ [${streamName}] Detected ${subjectMap.size} unique subjects in ${totalTime}ms`);
+      const subjects = Array.from(subjectMap.keys()).slice(0, 10);
+      console.log(`✅ [${streamName}] Subjects:`, subjects, subjectMap.size > 10 ? `... and ${subjectMap.size - 10} more` : '');
+      return subjectMap;
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [${streamName}] Failed to detect subject patterns after ${totalTime}ms:`, error);
+      return new Map();
+    }
+  }
+
   async getStreams(): Promise<StreamInfo[]> {
     console.log(`📊 getStreams called - Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}, isConnecting=${this.isConnecting}`);
 
@@ -110,7 +166,7 @@ export class NatsService {
         const retention = this.mapRetentionPolicy(streamInfo.config.retention);
         const storage = this.mapStorageType(streamInfo.config.storage);
 
-        streams.push({
+        const baseStream: StreamInfo = {
           config: {
             name: streamInfo.config.name,
             subjects: streamInfo.config.subjects || [],
@@ -128,12 +184,50 @@ export class NatsService {
             first_seq: streamInfo.state.first_seq,
             last_seq: streamInfo.state.last_seq,
             consumer_count: streamInfo.state.consumer_count,
+            first_ts: streamInfo.state.first_ts,
+            last_ts: streamInfo.state.last_ts,
           },
           created: streamInfo.created,
-        });
+        };
+
+        // Check if this is a source stream (no subjects configured)
+        if (baseStream.config.subjects.length === 0 && baseStream.state.messages > 0) {
+          console.log(`📦 Source stream detected: ${baseStream.config.name}, expanding into virtual streams...`);
+
+          // Always add the parent stream first (so users can view aggregate metadata)
+          streams.push(baseStream);
+
+          // Detect subject patterns with counts
+          const subjectMap = await this.detectSubjectPatterns(baseStream.config.name, 500);
+
+          if (subjectMap.size > 0) {
+            // Create virtual streams for each subject
+            for (const [subject, messageCount] of subjectMap.entries()) {
+              streams.push({
+                ...baseStream,
+                config: {
+                  ...baseStream.config,
+                  name: `${baseStream.config.name}/${subject}`,
+                  subjects: [subject], // Exact subject
+                },
+                state: {
+                  ...baseStream.state,
+                  messages: messageCount, // Accurate count from stream info
+                  bytes: -1, // Unknown - will display as "Unknown" in UI
+                },
+                isVirtual: true,
+                parentStream: baseStream.config.name,
+                virtualSubject: subject,
+              });
+            }
+          }
+        } else {
+          // Regular stream with subjects configured
+          streams.push(baseStream);
+        }
       }
 
-      console.log(`📊 Found ${streams.length} streams`);
+      console.log(`📊 Found ${streams.length} streams (including virtual streams)`);
       return streams;
     } catch (error) {
       console.error("Failed to get streams:", error);
@@ -147,8 +241,11 @@ export class NatsService {
     await this.ensureConnected();
 
     try {
+      // Handle virtual stream names (e.g., "AggregatedDataCombined/AggregatedDataEvents.hub")
+      const actualStreamName = streamName.includes('/') ? streamName.split('/')[0] : streamName;
+
       const consumers: ConsumerInfo[] = [];
-      const consumersList = await this.jsm.consumers.list(streamName).next();
+      const consumersList = await this.jsm.consumers.list(actualStreamName).next();
 
       for await (const consumerInfo of consumersList) {
         const ackPolicy = this.mapAckPolicy(consumerInfo.config.ack_policy);
@@ -181,26 +278,33 @@ export class NatsService {
     }
   }
 
-  async getMessages(subject: string, limit: number = 50, offset: number = 0): Promise<NatsMessage[]> {
-    console.log(`📨 getMessages called for subject="${subject}" - Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}, isConnecting=${this.isConnecting}`);
+  async getMessages(subject: string, limit: number = 50, offset: number = 0, streamName?: string): Promise<NatsMessage[]> {
+    console.log(`📨 getMessages called for subject="${subject}", streamName="${streamName || 'auto'}" - Connection state: nc=${!!this.nc}, jsm=${!!this.jsm}, js=${!!this.js}, isConnecting=${this.isConnecting}`);
 
     await this.ensureConnected();
 
     try {
       let messages: NatsMessage[] = [];
-
-      // Find stream that contains this subject
-      const streamsList = await this.jsm.streams.list().next();
       let targetStream: string | null = null;
 
-      for await (const streamInfo of streamsList) {
-        const subjects = streamInfo.config.subjects || [];
-        // Check if subject pattern could match stream subjects
-        // For example, if looking for "CleanData.*.0x123", check if stream has "CleanData.>"
-        if (subjects.some((s) => this.couldMatchStream(subject, s))) {
-          targetStream = streamInfo.config.name;
-          console.log(`📊 Found stream ${targetStream} with subjects: ${subjects.join(', ')}`);
-          break;
+      // If streamName is provided (from virtual stream), use it directly
+      if (streamName) {
+        // Handle virtual stream names (e.g., "AggregatedDataCombined/AggregatedDataEvents.hub")
+        targetStream = streamName.includes('/') ? streamName.split('/')[0] : streamName;
+        console.log(`📊 Using provided stream: ${targetStream} (virtual: ${streamName.includes('/')})`);
+      } else {
+        // Find stream that contains this subject
+        const streamsList = await this.jsm.streams.list().next();
+
+        for await (const streamInfo of streamsList) {
+          const subjects = streamInfo.config.subjects || [];
+          // Check if subject pattern could match stream subjects
+          // For example, if looking for "CleanData.*.0x123", check if stream has "CleanData.>"
+          if (subjects.some((s) => this.couldMatchStream(subject, s))) {
+            targetStream = streamInfo.config.name;
+            console.log(`📊 Found stream ${targetStream} with subjects: ${subjects.join(', ')}`);
+            break;
+          }
         }
       }
 

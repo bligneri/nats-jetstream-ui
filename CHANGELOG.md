@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2025-11-03
+
+### Added
+
+#### Virtual Streams for Source Streams
+- Automatic expansion of source streams (leaf node aggregation streams) into virtual streams
+- Each unique subject in a source stream becomes a browsable virtual stream
+- Fast subject pattern detection using `jsm.streams.info()` with subjects_filter
+- Virtual streams show parent stream name with clickable navigation back to aggregate view
+- Search functionality in stream list (appears when >30 streams)
+- Frontend filtering of streams by name, virtual subject, or parent stream
+
+#### Stream Statistics
+- First message timestamp display
+- Last message timestamp display
+- Average messages per day calculation
+- Message count per virtual stream (when available from stream state)
+- Size shows "Unknown" for virtual streams (per-subject bytes not available)
+
+#### UI Improvements
+- Virtual streams display only unique subject part in sidebar (no repetition of parent name)
+- Blue banner on virtual stream info page showing it's a filtered view with clickable parent link
+- Stream list search box for filtering through hundreds of virtual streams
+- Cleaner display with "?" for unknown message counts in sidebar
+
+### Changed
+- Source streams now appear in stream list alongside their virtual stream expansions
+- Virtual stream subjects use exact matching instead of wildcards for accurate message retrieval
+- Stream list layout updated to flex column with scrollable area for better UX with many streams
+
+### Technical Details
+- Virtual streams use parent stream name with subject filter for message queries
+- Pattern detection extracts all unique subjects from `streamInfo.state.subjects`
+- Subject map includes message counts per subject for accurate virtual stream metadata
+- Virtual streams metadata: `isVirtual`, `parentStream`, `virtualSubject` flags
+
 ## [0.1.0] - 2025-01-02
 
 ### Added
