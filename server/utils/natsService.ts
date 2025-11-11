@@ -22,6 +22,10 @@ export class NatsService {
   private connectionDetails: NatsConnectionDetails | null = null;
   private isConnecting: boolean = false;
 
+  // Memory optimization settings
+  private readonly MAX_SEARCH_RANGE = 10000; // Reduced from 50000
+  private readonly CHUNK_SIZE = 500; // Process messages in chunks
+
   async connect(details: NatsConnectionDetails): Promise<void> {
     try {
       this.isConnecting = true;
@@ -94,6 +98,144 @@ export class NatsService {
 
   getConnectionInfo(): NatsConnectionDetails | null {
     return this.connectionDetails;
+  }
+
+  /**
+   * Fetch messages in chunks to avoid memory spikes
+   * Processes messages in batches and stops early when limit is reached
+   */
+  private async fetchMessagesInChunks(
+    streamName: string,
+    startSeq: number,
+    endSeq: number,
+    limit: number,
+    subjectFilter?: string
+  ): Promise<NatsMessage[]> {
+    const messages: NatsMessage[] = [];
+    const totalRange = endSeq - startSeq + 1;
+    const numChunks = Math.ceil(totalRange / this.CHUNK_SIZE);
+
+    console.log(`🔄 Fetching ${totalRange} messages in ${numChunks} chunks of ${this.CHUNK_SIZE}`);
+
+    // Process backwards from most recent
+    for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+      const chunkStart = Math.max(startSeq, endSeq - (chunkIndex + 1) * this.CHUNK_SIZE + 1);
+      const chunkEnd = endSeq - chunkIndex * this.CHUNK_SIZE;
+
+      console.log(`  📦 Chunk ${chunkIndex + 1}/${numChunks}: seq ${chunkStart} to ${chunkEnd}`);
+
+      // Fetch this chunk in parallel
+      const fetchPromises = [];
+      for (let seq = chunkEnd; seq >= chunkStart; seq--) {
+        fetchPromises.push(
+          this.jsm.streams.getMessage(streamName, { seq }).catch(() => null)
+        );
+      }
+
+      const results = await Promise.all(fetchPromises);
+
+      // Process results and filter
+      for (const msg of results) {
+        if (!msg) continue;
+
+        // Apply subject filter if provided
+        if (subjectFilter && msg.subject !== subjectFilter) {
+          continue;
+        }
+
+        const headers: { [key: string]: string[] } = {};
+        if (msg.headers) {
+          for (const [key, values] of msg.headers) {
+            headers[key] = Array.isArray(values) ? values : [values];
+          }
+        }
+
+        messages.push({
+          seq: msg.seq,
+          subject: msg.subject,
+          data: Buffer.from(msg.data).toString("base64"),
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          time: msg.time,
+        });
+
+        // Early exit if we have enough messages
+        if (messages.length >= limit) {
+          console.log(`  ✅ Reached limit of ${limit} messages, stopping early`);
+          return messages;
+        }
+      }
+
+      console.log(`  ✓ Chunk ${chunkIndex + 1} complete, ${messages.length}/${limit} messages found`);
+    }
+
+    return messages;
+  }
+
+  /**
+   * Fetch messages with wildcard pattern matching in chunks
+   */
+  private async fetchMessagesWithPatternInChunks(
+    streamName: string,
+    startSeq: number,
+    endSeq: number,
+    limit: number,
+    pattern: string
+  ): Promise<NatsMessage[]> {
+    const messages: NatsMessage[] = [];
+    const totalRange = endSeq - startSeq + 1;
+    const numChunks = Math.ceil(totalRange / this.CHUNK_SIZE);
+
+    console.log(`🔄 Fetching ${totalRange} messages in ${numChunks} chunks with pattern matching`);
+
+    // Process backwards from most recent
+    for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+      const chunkStart = Math.max(startSeq, endSeq - (chunkIndex + 1) * this.CHUNK_SIZE + 1);
+      const chunkEnd = endSeq - chunkIndex * this.CHUNK_SIZE;
+
+      console.log(`  📦 Chunk ${chunkIndex + 1}/${numChunks}: seq ${chunkStart} to ${chunkEnd}`);
+
+      // Fetch this chunk in parallel
+      const fetchPromises = [];
+      for (let seq = chunkStart; seq <= chunkEnd; seq++) {
+        fetchPromises.push(
+          this.jsm.streams.getMessage(streamName, { seq }).catch(() => null)
+        );
+      }
+
+      const results = await Promise.all(fetchPromises);
+
+      // Process results and filter by pattern
+      for (const msg of results) {
+        if (!msg) continue;
+
+        if (this.natsSubjectMatches(msg.subject, pattern)) {
+          const headers: { [key: string]: string[] } = {};
+          if (msg.headers) {
+            for (const [key, values] of msg.headers) {
+              headers[key] = Array.isArray(values) ? values : [values];
+            }
+          }
+
+          messages.push({
+            seq: msg.seq,
+            subject: msg.subject,
+            data: Buffer.from(msg.data).toString("base64"),
+            headers: Object.keys(headers).length > 0 ? headers : undefined,
+            time: msg.time,
+          });
+
+          // Early exit if we have enough messages
+          if (messages.length >= limit) {
+            console.log(`  ✅ Reached limit of ${limit} messages, stopping early`);
+            return messages;
+          }
+        }
+      }
+
+      console.log(`  ✓ Chunk ${chunkIndex + 1} complete, ${messages.length}/${limit} messages found`);
+    }
+
+    return messages;
   }
 
   /**
@@ -334,65 +476,26 @@ export class NatsService {
 
           console.log(`✅ Found most recent at seq ${lastMsg.seq} with subject "${lastMsg.subject}"`);
 
-          // Add the first message (most recent)
-          const headers: { [key: string]: string[] } = {};
-          if (lastMsg.headers) {
-            for (const [key, values] of lastMsg.headers) {
-              headers[key] = Array.isArray(values) ? values : [values];
-            }
-          }
+          // Calculate search range accounting for offset
+          // Each "page" searches MAX_SEARCH_RANGE messages
+          const searchWindowEnd = lastMsg.seq - 1 - offset;
+          const searchWindowStart = Math.max(1, searchWindowEnd - this.MAX_SEARCH_RANGE + 1);
 
-          messages.push({
-            seq: lastMsg.seq,
-            subject: lastMsg.subject,
-            data: Buffer.from(lastMsg.data).toString("base64"),
-            headers: Object.keys(headers).length > 0 ? headers : undefined,
-            time: lastMsg.time,
-          });
+          console.log(`🔍 Searching with offset ${offset}: seq ${searchWindowStart} to ${searchWindowEnd} in chunks`);
 
-          // Only search backwards if user wants more than 1 message
-          if (limit > 1) {
-            // Search a reasonable range quickly - don't wait to find all 50!
-            // Just search 50k messages and return whatever we find
-            const searchRange = 50000;
-            const endSeq = lastMsg.seq - 1;
-            const startSeq = Math.max(1, endSeq - searchRange + 1);
+          // Use chunked fetching to avoid memory spike
+          const foundMessages = await this.fetchMessagesInChunks(
+            targetStream,
+            searchWindowStart,
+            searchWindowEnd,
+            limit,
+            subject // Filter by exact subject
+          );
 
-            console.log(`🔍 Searching ${searchRange} messages (seq ${startSeq} to ${endSeq})`);
+          messages.push(...foundMessages);
 
-            const fetchPromises = [];
-            for (let seq = endSeq; seq >= startSeq; seq--) {
-              fetchPromises.push(
-                this.jsm.streams.getMessage(targetStream, { seq }).catch(() => null)
-              );
-            }
+          console.log(`📊 Found ${messages.length} matches in ${this.MAX_SEARCH_RANGE} range`);
 
-            const results = await Promise.all(fetchPromises);
-
-            for (const msg of results) {
-              if (!msg || msg.subject !== subject) continue;
-
-              const msgHeaders: { [key: string]: string[] } = {};
-              if (msg.headers) {
-                for (const [key, values] of msg.headers) {
-                  msgHeaders[key] = Array.isArray(values) ? values : [values];
-                }
-              }
-
-              messages.push({
-                seq: msg.seq,
-                subject: msg.subject,
-                data: Buffer.from(msg.data).toString("base64"),
-                headers: Object.keys(msgHeaders).length > 0 ? msgHeaders : undefined,
-                time: msg.time,
-              });
-
-              // Stop at limit to avoid over-fetching
-              if (messages.length >= limit) break;
-            }
-
-            console.log(`📊 Found ${messages.length - 1} more matches in 50k range (total: ${messages.length})`);
-          }
 
           // Sort newest first
           messages.sort((a, b) => b.seq - a.seq);
@@ -423,52 +526,22 @@ export class NatsService {
 
       console.log(`📊 Stream ${targetStream}: seq ${firstSeq} to ${lastSeq}`);
 
-      // Fetch most recent messages in parallel (limit * 10 to account for filtering)
-      const fetchCount = Math.min(limit * 10, 500);
+      // Use chunked fetching with a reasonable search range
+      // For wildcard patterns, search up to MAX_SEARCH_RANGE messages
+      const fetchCount = Math.min(limit * 10, this.MAX_SEARCH_RANGE);
       const endSeq = lastSeq - offset;
       const startSeq = Math.max(firstSeq, endSeq - fetchCount + 1);
 
-      console.log(`⚡ Wildcard pattern - parallel fetch: ${fetchCount} messages (seq ${startSeq} to ${endSeq})`);
+      console.log(`⚡ Wildcard pattern - chunked fetch: ${fetchCount} messages (seq ${startSeq} to ${endSeq})`);
 
-      const fetchPromises = [];
-      for (let seq = startSeq; seq <= endSeq; seq++) {
-        fetchPromises.push(
-          this.jsm.streams.getMessage(targetStream, { seq }).catch(() => null)
-        );
-      }
-
-      const results = await Promise.all(fetchPromises);
-
-      let skippedForOffset = 0;
-      for (const msg of results) {
-        if (!msg) continue;
-
-        if (this.natsSubjectMatches(msg.subject, subject)) {
-          if (skippedForOffset < offset) {
-            skippedForOffset++;
-            continue;
-          }
-
-          const headers: { [key: string]: string[] } = {};
-          if (msg.headers) {
-            for (const [key, values] of msg.headers) {
-              headers[key] = Array.isArray(values) ? values : [values];
-            }
-          }
-
-          messages.push({
-            seq: msg.seq,
-            subject: msg.subject,
-            data: Buffer.from(msg.data).toString("base64"),
-            headers: Object.keys(headers).length > 0 ? headers : undefined,
-            time: msg.time,
-          });
-
-          if (messages.length >= limit) {
-            break;
-          }
-        }
-      }
+      // Use chunked fetching with pattern matching
+      messages = await this.fetchMessagesWithPatternInChunks(
+        targetStream,
+        startSeq,
+        endSeq,
+        limit,
+        subject
+      );
 
       // Sort by sequence number, newest first
       messages.sort((a, b) => b.seq - a.seq);

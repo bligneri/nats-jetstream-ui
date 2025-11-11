@@ -29,6 +29,11 @@ const offset = ref(0);
 const hasMore = ref(true);
 const limit = 50;
 
+// Memory safeguards
+const MAX_MESSAGES = 5000; // Maximum messages to keep in memory
+const WARNING_THRESHOLD = 3000; // Warn user when approaching limit
+const showMemoryWarning = ref(false);
+
 // Load decorators on mount
 onMounted(async () => {
   const { loadDecorators } = await import('~/utils/messageDecorators');
@@ -62,13 +67,30 @@ async function fetchMessages(append = false) {
     console.log(`✅ Received ${data.length} messages:`, data.length > 0 ? data[0] : 'empty');
 
     if (append) {
+      // Check if we're approaching memory limits
+      const newTotal = messages.value.length + data.length;
+
+      if (newTotal >= MAX_MESSAGES) {
+        // Stop loading more and show warning
+        hasMore.value = false;
+        showMemoryWarning.value = true;
+        error.value = `Memory limit reached. Displaying first ${messages.value.length} messages. Please refine your search or use a more specific subject filter.`;
+        return;
+      }
+
+      if (newTotal >= WARNING_THRESHOLD && !showMemoryWarning.value) {
+        showMemoryWarning.value = true;
+        console.warn(`⚠️ Approaching memory limit: ${newTotal}/${MAX_MESSAGES} messages loaded`);
+      }
+
       messages.value = [...messages.value, ...data];
     } else {
       messages.value = data;
+      showMemoryWarning.value = false;
     }
 
     // Check if there are more messages
-    hasMore.value = data.length === limit;
+    hasMore.value = data.length === limit && messages.value.length < MAX_MESSAGES;
 
     console.log(`Total messages in UI: ${messages.value.length}, hasMore: ${hasMore.value}`);
   } catch (e: any) {
@@ -270,6 +292,14 @@ function filterByExactSubject(exactSubject: string) {
     </div>
 
     <p v-if="error" class="mt-2 text-sm text-red-400">{{ error }}</p>
+
+    <!-- Memory warning -->
+    <div v-if="showMemoryWarning && !error" class="mt-2 rounded-md bg-yellow-900/20 border border-yellow-600/30 p-3">
+      <p class="text-sm text-yellow-400">
+        <span class="font-semibold">⚠️ High memory usage:</span>
+        {{ messages.length }} messages loaded. Consider using a more specific subject filter to reduce memory usage.
+      </p>
+    </div>
 
     <div class="mt-4 space-y-2">
       <div v-if="isLoading" class="flex justify-center p-8">

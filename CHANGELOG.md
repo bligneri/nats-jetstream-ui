@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7] - 2025-11-11
+
+### Fixed
+- Memory optimization: Replaced 50k parallel message fetches with chunked processing (500 messages per chunk)
+- Reduced max search range from 50k to 10k messages to prevent OOM errors
+- Fixed offset handling for exact subject searches to support deep pagination
+- Added frontend memory safeguards with 5k message limit and warnings at 3k messages
+
+### Changed
+- Message fetching now processes in chunks to avoid memory spikes
+- Search window moves deeper as user clicks "Load More" for pagination
+- Frontend displays memory warning when approaching 3k loaded messages
+- Frontend blocks loading beyond 5k messages with clear error message
+
+## [0.2.6] - 2025-11-10
+
+### Fixed
+- Trusted postinstall dependencies: tailwind, watcher
+
 ## [0.2.5] - 2025-11-10
 
 ### Fixed
