@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5] - 2025-11-10
+
+### Fixed
+- Prefix the command with `bun` for production with bun
+
 ## [0.2.4] - 2025-11-10
 
 ### Fixed
