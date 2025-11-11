@@ -36,7 +36,7 @@ export default defineNuxtConfig({
   },
   modules: ["@nuxt/image", "@nuxt/test-utils"],
   nitro: {
-    preset: "deno",
+    preset: "bun",
   },
   vite: {
     plugins: [tailwindcss()],

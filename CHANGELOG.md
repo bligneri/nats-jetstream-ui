@@ -2,11 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2025-11-10
+
+### Fixed
+- Use `bun` as native type for nitro engine / going to production with bun
+
 ## [0.2.3] - 2025-11-10
 
 ### Fixed
 - Typo: `serve`-> `start` (convention)
-- 
+
 ## [0.2.2] - 2025-11-10
 
 ### Fixed
