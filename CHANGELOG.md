@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2025-11-10
+
+### Fixed
+- Add the serve command for nuxt apps in production
+
 ## [0.2.1] - 2025-11-03
 
 ### Fixed
