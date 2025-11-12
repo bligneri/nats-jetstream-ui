@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2025-11-12
+
+### Fixed
+- SSE streaming timeout issues in production (Bun server 10-second default timeout)
+- Response buffering preventing real-time message streaming
+- Connection keepalive during long searches through sparse data
+
+### Changed
+- Increased Bun server idleTimeout to 300 seconds (5 minutes) for long-running SSE streams
+- Added explicit response flushing after each message write
+- Added SSE heartbeat comments before each search window to prevent idle timeouts
+- Enhanced SSE headers with X-Accel-Buffering and no-transform directives
+- Renamed "Copy All" button to "Copy Message" for clarity
+
 ## [0.3.0] - 2025-11-11
 
 ### Added

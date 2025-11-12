@@ -18,8 +18,9 @@ export default defineEventHandler(async (event) => {
   // Set headers for Server-Sent Events
   setResponseHeaders(event, {
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Disable buffering for nginx/proxies
   });
 
   try {
@@ -35,6 +36,12 @@ export default defineEventHandler(async (event) => {
     while (sent < limitNum && hasMore) {
       console.log(`📬 API Stream: Fetching window (sent so far: ${sent}/${limitNum}, beforeSeq: ${lowestSeq || 'none'})`);
 
+      // Send heartbeat to keep connection alive during long searches
+      event.node.res.write(`: searching window before seq ${lowestSeq || 'latest'}\n\n`);
+      if (event.node.res.flush) {
+        event.node.res.flush();
+      }
+
       // Get messages from this window
       const messageStream = natsService.getMessagesStream(subject, limitNum - sent, lowestSeq, streamName);
 
@@ -47,6 +54,11 @@ export default defineEventHandler(async (event) => {
         sent++;
         foundInWindow++;
         event.node.res.write(`data: ${JSON.stringify(message)}\n\n`);
+
+        // Flush immediately to ensure streaming (prevent buffering)
+        if (event.node.res.flush) {
+          event.node.res.flush();
+        }
 
         // Track lowest and highest sequence in this window to know the search boundaries
         if (!windowLowestSeq || message.seq < windowLowestSeq) {

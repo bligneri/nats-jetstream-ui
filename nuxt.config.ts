@@ -37,6 +37,11 @@ export default defineNuxtConfig({
   modules: ["@nuxt/image", "@nuxt/test-utils"],
   nitro: {
     preset: "bun",
+    bun: {
+      // Increase timeout for long-running SSE streams
+      // Default is 10 seconds, we need more for streaming searches
+      idleTimeout: 300, // 5 minutes in seconds
+    },
   },
   vite: {
     plugins: [tailwindcss()],
