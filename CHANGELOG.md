@@ -2,19 +2,64 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2025-11-11
+
+### Added
+- Real-time message streaming with Server-Sent Events (SSE) for instant result display
+- Copy-to-clipboard functionality for all message data:
+  - Individual field copy (Serial, Mesh ID, Temperature, etc.) with hover-to-reveal clipboard icons
+  - Copy entire message as formatted JSON with "Copy Message" button
+  - Copy sequence number, timestamp, and headers separately
+  - Visual feedback with green checkmarks for 2 seconds after copying
+- Cancel button to stop ongoing message searches mid-stream
+- Auto-cancel streaming when navigating away from page using Vue lifecycle hooks
+- Infinite scroll pagination with "Load More" button
+- Message count badge displayed at top and bottom (near Load More) for convenience with large result sets
+- Multi-window search capability that automatically continues backward through 10k message windows until finding requested messages or hitting 100k gap
+
+### Changed
+- Message fetching now uses streaming instead of batch loading for immediate feedback
+- Backend searches across multiple 10k windows automatically to find 50 messages per page
+- Pagination tracks lowest sequence number seen for efficient continuation
+- "Load More" continues from where previous search left off, going deeper into history
+- Memory-optimized chunked processing (500 messages per chunk) to prevent OOM errors
+- Increased empty window tolerance to 10 windows (100k messages) for sparse data
+- Renamed "Copy All" to "Copy Message" for clarity (copies single message, not all messages)
+- Repositioned "Copy Message" button below timestamp to avoid blocking date/time display
+
+### Fixed
+- Memory optimization: Replaced 50k parallel message fetches with chunked processing
+- Reduced max search range per window from 50k to 10k messages to prevent OOM errors
+- Fixed offset handling for exact subject searches to support deep pagination
+- Eliminated "wait for full batch" delay by streaming results as they're found
+- Fixed empty window handling to continue searching rather than stopping prematurely
+
+### Performance
+- Messages appear in real-time as backend finds them (no batch waiting)
+- Supports searching through 300k+ message streams efficiently
+- Frontend handles sparse data where subject-specific messages are far apart
+- Chunked backend processing prevents memory spikes during large searches
+
 ## [0.2.7] - 2025-11-11
+
+### Added
+- Real-time message streaming with Server-Sent Events (SSE)
+- Cancel button to stop ongoing message searches
+- Auto-cancel streaming when navigating away from page
+- Pagination with "Load More" button showing remaining message count
 
 ### Fixed
 - Memory optimization: Replaced 50k parallel message fetches with chunked processing (500 messages per chunk)
 - Reduced max search range from 50k to 10k messages to prevent OOM errors
 - Fixed offset handling for exact subject searches to support deep pagination
-- Added frontend memory safeguards with 5k message limit and warnings at 3k messages
+- Eliminated "wait for full batch" delay by streaming results as they're found
 
 ### Changed
 - Message fetching now processes in chunks to avoid memory spikes
-- Search window moves deeper as user clicks "Load More" for pagination
-- Frontend displays memory warning when approaching 3k loaded messages
-- Frontend blocks loading beyond 5k messages with clear error message
+- Messages appear in real-time as backend finds them (no batch waiting)
+- Initial page shows 50 messages with option to load more
+- Backend continues searching while frontend displays results progressively
+- Streaming progress indicator shows connection status and message count
 
 ## [0.2.6] - 2025-11-10
 

@@ -101,6 +101,221 @@ export class NatsService {
   }
 
   /**
+   * Stream messages as they are found (async generator)
+   * Yields messages immediately instead of waiting for full batch
+   */
+  async *getMessagesStream(subject: string, limit: number = 50, beforeSeq?: number, streamName?: string): AsyncGenerator<NatsMessage> {
+    console.log(`📨 getMessagesStream called for subject="${subject}", streamName="${streamName || 'auto'}", beforeSeq=${beforeSeq || 'none'}`);
+
+    await this.ensureConnected();
+
+    try {
+      let targetStream: string | null = null;
+
+      // Find the target stream
+      if (streamName) {
+        targetStream = streamName.includes('/') ? streamName.split('/')[0] : streamName;
+        console.log(`📊 Using provided stream: ${targetStream}`);
+      } else {
+        const streamsList = await this.jsm.streams.list().next();
+        for await (const streamInfo of streamsList) {
+          const subjects = streamInfo.config.subjects || [];
+          if (subjects.some((s) => this.couldMatchStream(subject, s))) {
+            targetStream = streamInfo.config.name;
+            console.log(`📊 Found stream ${targetStream} with subjects: ${subjects.join(', ')}`);
+            break;
+          }
+        }
+      }
+
+      if (!targetStream) {
+        console.log(`⚠️  No stream found for subject pattern: ${subject}`);
+        return;
+      }
+
+      const isExactSubject = !subject.includes("*") && !subject.includes(">");
+
+      if (isExactSubject) {
+        console.log(`⚡ Exact subject - streaming search`);
+
+        // Determine the end of our search window
+        let searchWindowEnd: number;
+
+        if (beforeSeq !== undefined) {
+          // Continue from where we left off
+          searchWindowEnd = beforeSeq - 1;
+          console.log(`📄 Continuing search before seq ${beforeSeq}`);
+        } else {
+          // Get the most recent message first
+          const lastMsg = await this.jsm.streams.getMessage(targetStream, {
+            last_by_subj: subject
+          });
+          searchWindowEnd = lastMsg.seq - 1;
+          console.log(`✅ Found most recent at seq ${lastMsg.seq}, starting search from ${searchWindowEnd}`);
+        }
+
+        // Search backward 10k messages from the end point
+        const searchWindowStart = Math.max(1, searchWindowEnd - this.MAX_SEARCH_RANGE + 1);
+
+        console.log(`🔍 Streaming search from seq ${searchWindowStart} to ${searchWindowEnd}`);
+
+        yield* this.streamMessagesInChunks(targetStream, searchWindowStart, searchWindowEnd, subject);
+      } else {
+        console.log(`⚡ Wildcard pattern - streaming search`);
+
+        const streamInfo = await this.jsm.streams.info(targetStream);
+        const lastSeq = streamInfo.state.last_seq;
+        const firstSeq = streamInfo.state.first_seq;
+
+        if (lastSeq === 0 || firstSeq === 0) {
+          console.log(`⚠️  Stream is empty`);
+          return;
+        }
+
+        // Determine the end of our search window
+        let searchWindowEnd: number;
+
+        if (beforeSeq !== undefined) {
+          searchWindowEnd = beforeSeq - 1;
+          console.log(`📄 Continuing wildcard search before seq ${beforeSeq}`);
+        } else {
+          searchWindowEnd = lastSeq;
+          console.log(`📄 Starting wildcard search from seq ${searchWindowEnd}`);
+        }
+
+        // Search backward 10k messages from the end point
+        const searchWindowStart = Math.max(firstSeq, searchWindowEnd - this.MAX_SEARCH_RANGE + 1);
+
+        console.log(`🔍 Streaming wildcard search from seq ${searchWindowStart} to ${searchWindowEnd}`);
+
+        yield* this.streamMessagesWithPatternInChunks(targetStream, searchWindowStart, searchWindowEnd, subject);
+      }
+    } catch (error) {
+      console.error(`Failed to stream messages for ${subject}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stream messages in chunks (async generator)
+   * Yields messages as they are found (no limit - streams all matches)
+   */
+  private async *streamMessagesInChunks(
+    streamName: string,
+    startSeq: number,
+    endSeq: number,
+    subjectFilter?: string
+  ): AsyncGenerator<NatsMessage> {
+    const totalRange = endSeq - startSeq + 1;
+    const numChunks = Math.ceil(totalRange / this.CHUNK_SIZE);
+    let yieldedCount = 0;
+
+    console.log(`🔄 Streaming ${totalRange} messages in ${numChunks} chunks of ${this.CHUNK_SIZE} (no limit)`);
+
+    for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+      const chunkStart = Math.max(startSeq, endSeq - (chunkIndex + 1) * this.CHUNK_SIZE + 1);
+      const chunkEnd = endSeq - chunkIndex * this.CHUNK_SIZE;
+
+      console.log(`  📦 Chunk ${chunkIndex + 1}/${numChunks}: seq ${chunkStart} to ${chunkEnd}`);
+
+      const fetchPromises = [];
+      for (let seq = chunkEnd; seq >= chunkStart; seq--) {
+        fetchPromises.push(
+          this.jsm.streams.getMessage(streamName, { seq }).catch(() => null)
+        );
+      }
+
+      const results = await Promise.all(fetchPromises);
+
+      // Yield messages as we find them
+      for (const msg of results) {
+        if (!msg) continue;
+        if (subjectFilter && msg.subject !== subjectFilter) continue;
+
+        const headers: { [key: string]: string[] } = {};
+        if (msg.headers) {
+          for (const [key, values] of msg.headers) {
+            headers[key] = Array.isArray(values) ? values : [values];
+          }
+        }
+
+        yield {
+          seq: msg.seq,
+          subject: msg.subject,
+          data: Buffer.from(msg.data).toString("base64"),
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          time: msg.time,
+        };
+
+        yieldedCount++;
+      }
+
+      console.log(`  ✓ Chunk ${chunkIndex + 1} complete, ${yieldedCount} messages yielded so far`);
+    }
+
+    console.log(`✅ Streaming complete, ${yieldedCount} total messages yielded`);
+  }
+
+  /**
+   * Stream messages with pattern matching (async generator - no limit)
+   */
+  private async *streamMessagesWithPatternInChunks(
+    streamName: string,
+    startSeq: number,
+    endSeq: number,
+    pattern: string
+  ): AsyncGenerator<NatsMessage> {
+    const totalRange = endSeq - startSeq + 1;
+    const numChunks = Math.ceil(totalRange / this.CHUNK_SIZE);
+    let yieldedCount = 0;
+
+    console.log(`🔄 Streaming ${totalRange} messages in ${numChunks} chunks with pattern matching (no limit)`);
+
+    for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+      const chunkStart = Math.max(startSeq, endSeq - (chunkIndex + 1) * this.CHUNK_SIZE + 1);
+      const chunkEnd = endSeq - chunkIndex * this.CHUNK_SIZE;
+
+      console.log(`  📦 Chunk ${chunkIndex + 1}/${numChunks}: seq ${chunkStart} to ${chunkEnd}`);
+
+      const fetchPromises = [];
+      for (let seq = chunkStart; seq <= chunkEnd; seq++) {
+        fetchPromises.push(
+          this.jsm.streams.getMessage(streamName, { seq }).catch(() => null)
+        );
+      }
+
+      const results = await Promise.all(fetchPromises);
+
+      // Yield matching messages as we find them
+      for (const msg of results) {
+        if (!msg) continue;
+        if (!this.natsSubjectMatches(msg.subject, pattern)) continue;
+
+        const headers: { [key: string]: string[] } = {};
+        if (msg.headers) {
+          for (const [key, values] of msg.headers) {
+            headers[key] = Array.isArray(values) ? values : [values];
+          }
+        }
+
+        yield {
+          seq: msg.seq,
+          subject: msg.subject,
+          data: Buffer.from(msg.data).toString("base64"),
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          time: msg.time,
+        };
+
+        yieldedCount++;
+      }
+
+      console.log(`  ✓ Chunk ${chunkIndex + 1} complete, ${yieldedCount} messages yielded so far`);
+    }
+
+    console.log(`✅ Streaming complete, ${yieldedCount} total messages yielded`);
+  }
+
+  /**
    * Fetch messages in chunks to avoid memory spikes
    * Processes messages in batches and stops early when limit is reached
    */
