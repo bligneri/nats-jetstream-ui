@@ -150,8 +150,10 @@ export class NatsService {
           const lastMsg = await this.jsm.streams.getMessage(targetStream, {
             last_by_subj: subject
           });
-          searchWindowEnd = lastMsg.seq - 1;
-          console.log(`✅ Found most recent at seq ${lastMsg.seq}, starting search from ${searchWindowEnd}`);
+          console.log(`✅ Found most recent at seq ${lastMsg.seq}`);
+
+          // Include the most recent message in our search by starting from its seq
+          searchWindowEnd = lastMsg.seq;
         }
 
         // Search backward 10k messages from the end point

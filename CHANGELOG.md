@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2025-11-12
+
+### Fixed
+- SSE connection timeout during chunk processing with periodic heartbeat interval (every 2 seconds)
+- "Load More" button now appears even when backend stops after 10 empty windows, allowing manual continuation through very sparse data
+- Search window tracking bug causing repeated searches of the same sequence range
+- Frontend continuation point not updating when backend finds 0 messages, causing "Load More" to repeat same search
+- Initial exact subject search excluding the most recent message (was searching from seq-1 instead of seq)
+- "Load More" button now hidden when stream beginning (sequence 1) is reached
+
+### Changed
+- "Load More" shows hint text when searching through sparse data beyond automatic search limits
+- Moved streaming progress indicator and Cancel button to bottom of message list for easier access when viewing many messages
+- Improved empty window handling to correctly advance to next 10k window backward
+
+### Added
+- End-of-stream message displayed when reaching sequence 1 (beginning of stream)
+
 ## [0.3.1] - 2025-11-12
 
 ### Fixed

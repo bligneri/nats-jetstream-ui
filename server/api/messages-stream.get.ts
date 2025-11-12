@@ -47,35 +47,49 @@ export default defineEventHandler(async (event) => {
 
       let foundInWindow = 0;
       let windowLowestSeq = lowestSeq;
-      let windowStartSeq: number | undefined = undefined;
 
-      for await (const message of messageStream) {
-        // Send message
-        sent++;
-        foundInWindow++;
-        event.node.res.write(`data: ${JSON.stringify(message)}\n\n`);
+      // Calculate the search window range (must match natsService calculation)
+      const MAX_SEARCH_RANGE = 10000;
+      const searchWindowEnd = lowestSeq ? lowestSeq - 1 : undefined;
+      const searchWindowStart = searchWindowEnd ? Math.max(1, searchWindowEnd - MAX_SEARCH_RANGE + 1) : undefined;
 
-        // Flush immediately to ensure streaming (prevent buffering)
+      // Set up a heartbeat interval to keep connection alive during chunk processing
+      const heartbeatInterval = setInterval(() => {
+        event.node.res.write(`: heartbeat\n\n`);
         if (event.node.res.flush) {
           event.node.res.flush();
         }
+      }, 2000); // Send heartbeat every 2 seconds
 
-        // Track lowest and highest sequence in this window to know the search boundaries
-        if (!windowLowestSeq || message.seq < windowLowestSeq) {
-          windowLowestSeq = message.seq;
-        }
-        if (!windowStartSeq || message.seq < windowStartSeq) {
-          windowStartSeq = message.seq;
-        }
+      try {
+        for await (const message of messageStream) {
+          // Send message
+          sent++;
+          foundInWindow++;
+          event.node.res.write(`data: ${JSON.stringify(message)}\n\n`);
 
-        // Stop if we've reached the limit
-        if (sent >= limitNum) {
-          console.log(`📬 API Stream: Reached limit of ${limitNum} messages`);
-          break;
+          // Flush immediately to ensure streaming (prevent buffering)
+          if (event.node.res.flush) {
+            event.node.res.flush();
+          }
+
+          // Track lowest sequence in this window
+          if (!windowLowestSeq || message.seq < windowLowestSeq) {
+            windowLowestSeq = message.seq;
+          }
+
+          // Stop if we've reached the limit
+          if (sent >= limitNum) {
+            console.log(`📬 API Stream: Reached limit of ${limitNum} messages`);
+            break;
+          }
         }
+      } finally {
+        // Always clear the heartbeat interval
+        clearInterval(heartbeatInterval);
       }
 
-      console.log(`📬 API Stream: Found ${foundInWindow} messages in this window (total: ${sent}/${limitNum}, windowStart: ${windowStartSeq})`);
+      console.log(`📬 API Stream: Found ${foundInWindow} messages in this window (total: ${sent}/${limitNum}, searched: ${searchWindowStart}-${searchWindowEnd})`);
 
       // Update lowest sequence for next iteration
       if (foundInWindow > 0) {
@@ -83,13 +97,10 @@ export default defineEventHandler(async (event) => {
         lowestSeq = windowLowestSeq;
         consecutiveEmptyWindows = 0; // Reset empty window counter
       } else {
-        // Empty window - we need to move to the NEXT window backward
-        // The current window searched [windowStart, beforeSeq-1]
-        // Next window should be [windowStart-10000, windowStart-1]
-        if (lowestSeq) {
-          // Move back by MAX_SEARCH_RANGE (10k) to search the next window
-          const MAX_SEARCH_RANGE = 10000;
-          lowestSeq = Math.max(1, lowestSeq - MAX_SEARCH_RANGE);
+        // Empty window - move to the start of the window we just searched
+        // We searched [searchWindowStart, searchWindowEnd], so next window should start before searchWindowStart
+        if (searchWindowStart) {
+          lowestSeq = searchWindowStart;
           console.log(`📬 API Stream: Empty window, moving to next window before seq ${lowestSeq}`);
         }
         consecutiveEmptyWindows++;
@@ -118,9 +129,9 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    // Send completion event
-    event.node.res.write(`data: {"type":"complete","hasMore":${hasMore}}\n\n`);
-    console.log(`📬 API Stream: Completed streaming ${sent} messages (hasMore: ${hasMore}) for subject="${subject}"`);
+    // Send completion event with the continuation point
+    event.node.res.write(`data: {"type":"complete","hasMore":${hasMore},"continueFromSeq":${lowestSeq || null}}\n\n`);
+    console.log(`📬 API Stream: Completed streaming ${sent} messages (hasMore: ${hasMore}, continueFromSeq: ${lowestSeq}) for subject="${subject}"`);
 
     event.node.res.end();
   } catch (error: any) {

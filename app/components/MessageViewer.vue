@@ -106,6 +106,13 @@ async function fetchMessages(loadMore = false) {
         if (data.type === 'complete') {
           console.log(`✅ Stream complete: ${messagesInThisBatch} messages in this batch`);
 
+          // Update lowestSeqSeen from backend's continuation point
+          // This ensures we continue from the right place even if we got 0 messages
+          if (data.continueFromSeq !== null && data.continueFromSeq !== undefined) {
+            lowestSeqSeen.value = data.continueFromSeq;
+            console.log(`📍 Updated continuation point to seq ${data.continueFromSeq}`);
+          }
+
           if (data.hasMore) {
             hasMoreMessages.value = true;
             streamProgress.value = `Loaded ${messages.value.length} messages (more available)`;
@@ -381,13 +388,7 @@ function copyFullMessage(msg: NatsMessage) {
 
     <p v-if="error" class="mt-2 text-sm text-red-400">{{ error }}</p>
 
-    <!-- Streaming progress indicator -->
-    <div v-if="isStreaming && streamProgress" class="mt-2 rounded-md bg-blue-900/20 border border-blue-600/30 p-3">
-      <p class="text-sm text-blue-400">
-        <SpinnerIcon class="inline h-4 w-4 animate-spin mr-2" />
-        {{ streamProgress }}
-      </p>
-    </div>
+    <!-- Streaming progress indicator (removed from here, moved to bottom) -->
 
     <!-- Message count badge (always visible when there are messages) -->
     <div v-if="messages.length > 0 && !isStreaming" class="mt-2 flex items-center justify-between">
@@ -526,9 +527,9 @@ function copyFullMessage(msg: NatsMessage) {
       </template>
       <p v-else-if="!isStreaming" class="text-center text-slate-500">No messages found for this subject.</p>
 
-      <!-- Load More section with message count -->
-      <div v-if="hasMoreMessages && !isStreaming" class="pt-4 space-y-2">
-        <!-- Message count badge (also shown here for convenience) -->
+      <!-- Bottom action section: Load More or Cancel -->
+      <div v-if="messages.length > 0" class="pt-4 space-y-2">
+        <!-- Message count badge -->
         <div class="flex items-center justify-center">
           <div class="rounded-md bg-slate-700/50 border border-slate-600 px-3 py-2">
             <p class="text-sm font-medium text-slate-300">
@@ -537,11 +538,37 @@ function copyFullMessage(msg: NatsMessage) {
             </p>
           </div>
         </div>
-        <!-- Load More button -->
-        <div class="flex justify-center">
+
+        <!-- Streaming indicator and Cancel button (when streaming) -->
+        <div v-if="isStreaming" class="flex flex-col items-center gap-3">
+          <div class="rounded-md bg-blue-900/20 border border-blue-600/30 px-4 py-2">
+            <p class="text-sm text-blue-400">
+              <SpinnerIcon class="inline h-4 w-4 animate-spin mr-2" />
+              {{ streamProgress }}
+            </p>
+          </div>
+          <UiButton @click="cancelStream" class="bg-red-600 hover:bg-red-700">
+            Cancel Search
+          </UiButton>
+        </div>
+
+        <!-- Load More button (when not streaming and has more data) -->
+        <div v-else-if="(hasMoreMessages || lowestSeqSeen) && lowestSeqSeen !== 1" class="flex flex-col items-center gap-2">
           <UiButton @click="loadMore" class="bg-green-600 hover:bg-green-700">
             Load More
           </UiButton>
+          <p v-if="!hasMoreMessages && lowestSeqSeen && lowestSeqSeen > 1" class="text-xs text-slate-500">
+            Searching through sparse data (may require multiple attempts)
+          </p>
+        </div>
+
+        <!-- End of results message -->
+        <div v-else-if="messages.length > 0 && !hasMoreMessages && lowestSeqSeen === 1" class="flex justify-center">
+          <div class="rounded-md bg-slate-700/50 border border-slate-600 px-4 py-2">
+            <p class="text-sm text-slate-400">
+              ✓ Reached beginning of stream (no more messages)
+            </p>
+          </div>
         </div>
       </div>
     </div>
