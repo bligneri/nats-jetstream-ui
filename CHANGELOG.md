@@ -14,7 +14,6 @@ All notable changes to this project will be documented in this file.
 - Added explicit response flushing after each message write
 - Added SSE heartbeat comments before each search window to prevent idle timeouts
 - Enhanced SSE headers with X-Accel-Buffering and no-transform directives
-- Renamed "Copy All" button to "Copy Message" for clarity
 
 ## [0.3.0] - 2025-11-11
 
