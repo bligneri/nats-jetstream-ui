@@ -93,8 +93,8 @@ const handleDisconnect = async () => {
     } catch (error) {
         console.error('Failed to disconnect:', error);
     }
-    // Redirect to connection page with query param to show form
-    router.push("/?disconnected=true");
+    // Redirect to connection page
+    router.push("/");
 };
 </script>
 

@@ -47,14 +47,11 @@ watch(selectedServerId, (newVal) => {
   }
 });
 
-// Check if user manually disconnected (came from dashboard)
-const manualDisconnect = ref(route.query.disconnected === 'true');
-
 // Check if user is trying to access custom server without connection
 const needsCustomServer = ref(route.query.custom === 'true');
 
-// Start in connecting state if auto-connect is configured AND not manually disconnected
-const shouldAutoConnect = !!config.public.natsUrl && !manualDisconnect.value && !needsCustomServer.value;
+// Start in connecting state if auto-connect is configured
+const shouldAutoConnect = !!config.public.natsUrl && !needsCustomServer.value;
 const isConnecting = ref(shouldAutoConnect);
 const error = ref<string | null>(null);
 const showForm = ref(!shouldAutoConnect);
@@ -109,14 +106,16 @@ const handleConnect = async () => {
     }
     window.location.href = dashboardUrl;
   } catch (err: any) {
-    error.value = err.data?.statusMessage || 'An unknown error occurred.';
+    // Extract error message from various possible error structures
+    error.value = err.data?.statusMessage || err.statusMessage || err.message || 'Connection failed. Please check your server URL and try again.';
     showForm.value = true; // Show form on error
+    console.error('Connection error:', err);
   } finally {
     isConnecting.value = false;
   }
 };
 
-// Auto-connect if NATS_URL is set in environment AND not manually disconnected
+// Auto-connect if NATS_URL is set in environment
 if (shouldAutoConnect) {
   nextTick(async () => {
     await handleConnect();
@@ -125,9 +124,36 @@ if (shouldAutoConnect) {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col items-center justify-center bg-slate-900 p-4">
-    <!-- Auto-connecting loading screen -->
-    <div v-if="isConnecting" class="w-full max-w-md text-center">
+  <div class="flex min-h-screen flex-col bg-slate-900">
+    <!-- Header with server navigation -->
+    <header v-if="showForm && servers.length > 0" class="flex flex-shrink-0 items-center justify-between border-b border-slate-700 bg-slate-800 px-4 py-2 shadow-md">
+      <div class="flex items-center space-x-3">
+        <NatsIcon class="h-8 w-8 text-green-400" />
+        <h1 class="text-xl font-semibold text-white">
+          JetStream Explorer
+        </h1>
+      </div>
+      <div class="flex items-center space-x-4">
+        <div class="text-sm text-slate-400">
+          Select Server:
+        </div>
+        <select
+          v-model="selectedServerId"
+          @change="() => { if (selectedServerId) { window.location.href = `/${selectedServerId}/dashboard`; } }"
+          class="rounded-md bg-slate-700 border border-slate-600 px-3 py-1 text-sm text-slate-200 hover:bg-slate-600 focus:border-green-400 focus:outline-none focus:ring-1 focus:ring-green-400"
+        >
+          <option :value="null">Custom Server</option>
+          <option v-for="server in servers" :key="server.id" :value="server.id">
+            {{ server.name }}
+          </option>
+        </select>
+      </div>
+    </header>
+
+    <!-- Main content area -->
+    <div class="flex flex-grow items-center justify-center p-4">
+      <!-- Auto-connecting loading screen -->
+      <div v-if="isConnecting" class="w-full max-w-md text-center">
       <NatsIcon class="mx-auto h-20 w-20 text-green-400 animate-pulse" />
       <h1 class="mt-4 text-2xl font-bold text-white">
         Connecting to NATS...
@@ -159,22 +185,6 @@ if (shouldAutoConnect) {
         </div>
 
         <form @submit.prevent="handleConnect" class="space-y-6">
-          <!-- Server Selection -->
-          <div v-if="servers.length > 0">
-            <label for="server-select" class="block text-sm font-medium text-slate-300 mb-2">Select Server</label>
-            <select
-              id="server-select"
-              v-model="selectedServerId"
-              class="w-full rounded-md bg-slate-700 border border-slate-600 px-3 py-2 text-slate-200 focus:border-green-400 focus:outline-none focus:ring-1 focus:ring-green-400"
-            >
-              <option v-for="server in servers" :key="server.id" :value="server.id">
-                {{ server.name }} ({{ server.url }})
-              </option>
-            </select>
-          </div>
-
-          <div class="text-center text-sm text-slate-500">— or —</div>
-
           <UiInput
             id="serverName"
             label="Custom Server Name"
@@ -208,6 +218,7 @@ if (shouldAutoConnect) {
           <span class="font-bold">Ready to connect:</span> Enter your NATS server details above to explore your JetStream streams, consumers, and messages.
         </p>
       </div>
+    </div>
     </div>
   </div>
 </template>

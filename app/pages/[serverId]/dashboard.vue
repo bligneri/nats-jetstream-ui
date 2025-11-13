@@ -13,47 +13,50 @@ definePageMeta({
         defineNuxtRouteMiddleware(async (to, from) => {
             // Get serverId from route
             const serverId = parseInt(to.params.serverId as string, 10);
+            console.log('🛂 Middleware: Navigating to serverId:', serverId, 'from:', from?.params?.serverId);
 
-            // Check server-side connection status
+            // Always try to connect to the requested server (for configured servers)
             try {
-                const status = await $fetch<{ connected: boolean; hasConnectionDetails: boolean }>('/api/connection-status');
-
-                // If not connected, try to auto-connect to configured server
-                if (!status.hasConnectionDetails && serverId > 0) {
+                if (serverId > 0) {
                     const serverConfig = await $fetch<any>('/api/servers');
                     const server = serverConfig.servers?.find((s: any) => s.id === serverId);
+                    console.log('🛂 Middleware: Found server config for serverId', serverId, ':', server);
 
                     if (server) {
-                        // Auto-connect to configured server
-                        await $fetch('/api/connect', {
-                            method: 'POST',
-                            body: {
-                                serverUrl: server.url,
-                                user: '',
-                                password: '',
-                            },
-                        });
-                        return; // Continue to dashboard
+                        try {
+                            console.log('🛂 Middleware: Attempting to connect to', server.url);
+                            // Always try to connect to ensure we're on the right server
+                            await $fetch('/api/connect', {
+                                method: 'POST',
+                                body: {
+                                    serverUrl: server.url,
+                                    user: '',
+                                    password: '',
+                                },
+                            });
+                            console.log('🛂 Middleware: Connection successful');
+                            return; // Connection successful, continue to dashboard
+                        } catch (connectError) {
+                            // Connection failed - let the page load so it can show the error banner
+                            console.error('🛂 Middleware: Connection failed, will show error banner:', connectError);
+                            return; // Continue to dashboard which will detect the error and show banner
+                        }
                     }
                 }
 
-                // If still no connection, redirect to home
-                if (!status.hasConnectionDetails) {
-                    // For custom server (serverId=0), add hint that they need to connect
-                    if (serverId === 0) {
-                        return navigateTo("/?custom=true");
-                    }
-                    return navigateTo("/");
-                }
+                console.log('🛂 Middleware: Allowing page to load (custom server or no config)');
+                // For custom servers (serverId=0), let the page load
+                // It will detect the error and show the connection error banner
             } catch (error) {
-                console.error('Failed to check/establish connection:', error);
-                return navigateTo("/");
+                console.error('🛂 Middleware: Failed in middleware:', error);
+                // Let the page load anyway, it will handle the error
             }
         }),
     ],
 });
 
 const { setConnection } = useNatsConnection();
+const { connectionError, isRetrying, handleApiError, clearConnectionError } = useConnectionHealth();
 const router = useRouter();
 const route = useRoute();
 
@@ -68,6 +71,7 @@ const streams = ref<StreamInfo[]>([]);
 const selectedStream = ref<StreamInfo>();
 const isLoading = ref(true);
 const serverUrl = ref<string>(''); // Will be fetched from server
+const serverSelectRef = ref<HTMLSelectElement | null>(null);
 
 // Format server URL to show only hostname:port (hide credentials)
 const formatServerUrl = (url: string): string => {
@@ -98,14 +102,25 @@ const serverDisplayName = computed(() => {
 onMounted(async () => {
     isLoading.value = true;
     try {
-        // Fetch servers config, connection info and streams in parallel
-        const [serverConfig, connectionInfo, fetchedStreams] = await Promise.all([
-            $fetch<any>('/api/servers'),
+        // Always fetch server config first (this doesn't require connection)
+        const serverConfig = await $fetch<any>('/api/servers');
+        servers.value = serverConfig.servers;
+
+        // Set serverUrl based on serverId (for error display)
+        if (serverId.value > 0) {
+            const server = servers.value.find(s => s.id === serverId.value);
+            if (server) {
+                serverUrl.value = server.url;
+            }
+        }
+
+        // Try to fetch connection info and streams
+        const [connectionInfo, fetchedStreams] = await Promise.all([
             $fetch<{ serverUrl: string }>('/api/connection-info'),
             $fetch<StreamInfo[]>("/api/streams")
         ]);
 
-        servers.value = serverConfig.servers;
+        // Update serverUrl from connection info (might be different for custom servers)
         serverUrl.value = connectionInfo.serverUrl;
         streams.value = fetchedStreams;
 
@@ -119,8 +134,9 @@ onMounted(async () => {
             // Set URL param for default stream
             router.replace({ query: { stream: fetchedStreams[0].config.name } });
         }
-    } catch (error) {
-        console.error("Failed to fetch streams:", error);
+    } catch (error: any) {
+        console.error("Failed to fetch dashboard data:", error);
+        handleApiError(error);
     } finally {
         isLoading.value = false;
     }
@@ -133,20 +149,46 @@ const handleSelectStream = (stream: StreamInfo) => {
 };
 
 const handleServerSwitch = async (newServerId: number) => {
+    console.log('🔄 handleServerSwitch called with newServerId:', newServerId);
+    clearConnectionError(); // Clear connection health errors
+
     if (newServerId === 0) {
+        console.log('🔄 Switching to custom server (0), redirecting to connection page');
         // Manual/Custom server - disconnect and go to connection page
         try {
             await $fetch('/api/disconnect', { method: 'POST' });
         } catch (error) {
             console.error('Failed to disconnect:', error);
         }
-        router.push("/?disconnected=true");
+        router.push("/");
     } else {
         // Switch to another configured server
         const server = servers.value.find(s => s.id === newServerId);
+        console.log('🔄 Found server config:', server);
         if (server) {
-            try {
-                // Reconnect to the new server
+            // Always navigate to the new server's dashboard WITHOUT query params
+            // Each server has its own streams, so old stream/subject params don't make sense
+            console.log(`🔄 Navigating to /${newServerId}/dashboard (clearing query params)`);
+            window.location.href = `/${newServerId}/dashboard`;
+        } else {
+            console.error('❌ Server not found in config for id:', newServerId);
+        }
+    }
+};
+
+// Retry connection for configured servers
+const handleRetry = async () => {
+    clearConnectionError();
+    isRetrying.value = true;
+
+    try {
+        if (serverId.value === 0) {
+            // Custom server - redirect to connection page to enter new URL
+            router.push("/?custom=true");
+        } else {
+            // Configured server - attempt to reconnect
+            const server = servers.value.find(s => s.id === serverId.value);
+            if (server) {
                 await $fetch('/api/connect', {
                     method: 'POST',
                     body: {
@@ -155,13 +197,21 @@ const handleServerSwitch = async (newServerId: number) => {
                         password: '',
                     },
                 });
-                // Navigate to new server dashboard and reload
-                window.location.href = `/${newServerId}/dashboard`;
-            } catch (error) {
-                console.error('Failed to switch servers:', error);
+                // Reload page to refresh all data
+                window.location.reload();
             }
         }
+    } catch (error: any) {
+        console.error('Retry failed:', error);
+        handleApiError(error);
+    } finally {
+        isRetrying.value = false;
     }
+};
+
+// Navigate to connection page to change URL
+const handleChangeUrl = () => {
+    router.push("/");
 };
 </script>
 
@@ -184,8 +234,14 @@ const handleServerSwitch = async (newServerId: number) => {
                     }}</span>
                 </div>
                 <select
+                    ref="serverSelectRef"
                     :value="serverId"
-                    @change="handleServerSwitch(parseInt(($event.target as HTMLSelectElement).value))"
+                    @change="(event) => {
+                        const value = (event.target as HTMLSelectElement).value;
+                        const parsedValue = parseInt(value);
+                        console.log('🔄 Dropdown changed - raw value:', value, 'parsed:', parsedValue);
+                        handleServerSwitch(parsedValue);
+                    }"
                     class="rounded-md bg-slate-700 border border-slate-600 px-3 py-1 text-sm text-slate-200 hover:bg-slate-600 focus:border-green-400 focus:outline-none focus:ring-1 focus:ring-green-400"
                 >
                     <option v-for="server in servers" :key="server.id" :value="server.id">
@@ -197,8 +253,58 @@ const handleServerSwitch = async (newServerId: number) => {
         </header>
 
         <main class="flex flex-grow overflow-hidden">
+            <!-- Connection lost error banner with retry options -->
             <div
-                v-if="isLoading"
+                v-if="connectionError"
+                class="flex h-full w-full flex-col items-center justify-center bg-slate-900 p-8"
+            >
+                <div class="w-full max-w-2xl rounded-lg border border-red-500/30 bg-red-500/10 p-8 text-center">
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-red-400 mb-2">Connection Lost</h2>
+                        <p class="text-red-300 mb-4">{{ connectionError.message }}</p>
+                        <div class="text-sm text-slate-400 font-mono">
+                            Server: {{ formatServerUrl(serverUrl) }}
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col gap-3 items-center">
+                        <!-- Retry button for configured servers -->
+                        <button
+                            v-if="serverId !== 0"
+                            @click="handleRetry"
+                            :disabled="isRetrying"
+                            class="px-6 py-3 rounded-md bg-green-500 hover:bg-green-600 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[200px]"
+                        >
+                            <span v-if="isRetrying" class="flex items-center justify-center">
+                                <SpinnerIcon class="mr-2 h-5 w-5 animate-spin" />
+                                Reconnecting...
+                            </span>
+                            <span v-else>Retry Connection</span>
+                        </button>
+
+                        <!-- Change URL button for custom servers -->
+                        <button
+                            v-if="serverId === 0"
+                            @click="handleChangeUrl"
+                            class="px-6 py-3 rounded-md bg-blue-500 hover:bg-blue-600 text-white font-semibold transition-colors min-w-[200px]"
+                        >
+                            Change Server URL
+                        </button>
+
+                        <!-- Alternative: Go to connection page -->
+                        <button
+                            @click="() => router.push('/')"
+                            class="px-6 py-3 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold transition-colors min-w-[200px]"
+                        >
+                            Go to Connection Page
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Normal content when connected -->
+            <div
+                v-else-if="isLoading"
                 class="flex h-full w-full items-center justify-center"
             >
                 <SpinnerIcon class="h-10 w-10 animate-spin text-green-400" />

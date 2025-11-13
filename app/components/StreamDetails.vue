@@ -16,6 +16,7 @@ const props = defineProps<{
 
 const route = useRoute();
 const router = useRouter();
+const { handleApiError } = useConnectionHealth();
 
 const navigateToParentStream = () => {
   if (props.stream.parentStream) {
@@ -82,7 +83,11 @@ const fetchSubjects = async () => {
     );
   } catch (error: any) {
     console.error('Failed to fetch subjects:', error);
-    subjectsError.value = error.data?.statusMessage || 'Failed to fetch subjects';
+    const isConnectionError = handleApiError(error);
+    if (!isConnectionError) {
+      // Only show local error if it's not a connection error (connection errors are handled globally)
+      subjectsError.value = error.data?.statusMessage || 'Failed to fetch subjects';
+    }
   } finally {
     isLoadingSubjects.value = false;
   }

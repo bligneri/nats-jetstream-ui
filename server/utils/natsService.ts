@@ -40,8 +40,8 @@ export class NatsService {
         this.js = null;
       }
 
-      // Store connection details BEFORE connecting so we can reconnect later
-      this.connectionDetails = details;
+      // Clear old connection details before trying new connection
+      this.connectionDetails = null;
 
       // Connect to NATS
       this.nc = await connect({
@@ -54,6 +54,9 @@ export class NatsService {
       // Initialize JetStream manager and client
       this.jsm = await this.nc.jetstreamManager();
       this.js = this.nc.jetstream();
+
+      // Only store connection details AFTER successful connection
+      this.connectionDetails = details;
       this.isConnecting = false;
 
       console.log("✅ Connected to NATS JetStream successfully");
@@ -77,14 +80,8 @@ export class NatsService {
       return;
     }
 
-    // If we have connection details but no connection, try to reconnect
-    if (this.connectionDetails && !this.isConnecting) {
-      console.log("🔄 Auto-reconnecting to NATS...");
-      await this.connect(this.connectionDetails);
-      return;
-    }
-
-    // No connection and no details stored
+    // No auto-reconnect! Just throw error if not connected
+    // This prevents reconnecting to old server when switching to a new one
     throw new Error("Not connected to NATS. Call connect() first.");
   }
 

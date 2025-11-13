@@ -16,6 +16,7 @@ const props = defineProps<{
 }>();
 
 const route = useRoute();
+const { handleApiError } = useConnectionHealth();
 
 // Convert first subject to a wildcard pattern that will match all messages
 // e.g., "commands.*" stays as "commands.*", "commands.dlq.>" becomes "commands.dlq.*"
@@ -198,12 +199,20 @@ async function fetchMessages(loadMore = false) {
 
     eventSource.onerror = (e) => {
       console.error('❌ EventSource error:', e);
-      error.value = 'Stream connection error';
+      // Check if this is a connection error
+      const mockError = { message: 'Stream connection error' };
+      const isConnectionError = handleApiError(mockError);
+      if (!isConnectionError) {
+        error.value = 'Stream connection error';
+      }
       cancelStream();
     };
   } catch (e: any) {
     console.error('❌ Error starting stream:', e);
-    error.value = e.message || 'Failed to start message stream';
+    const isConnectionError = handleApiError(e);
+    if (!isConnectionError) {
+      error.value = e.message || 'Failed to start message stream';
+    }
     isStreaming.value = false;
   }
 }

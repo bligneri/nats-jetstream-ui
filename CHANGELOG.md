@@ -2,12 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2025-11-13
+
+### Fixed
+- Server switching now properly disconnects from old server and connects to new server
+- Auto-reconnect logic removed to prevent connecting to wrong server when switching fails
+- Connection error banner now appears when navigating to unreachable servers
+- Error detection now recognizes "Not connected" error messages from backend
+- Query parameters no longer pollute URLs with implementation details like `?disconnected=true`
+- Stream query parameter no longer persists when switching to different servers
+
+### Changed
+- Middleware now always attempts connection for configured servers instead of checking connection state
+- Connection details stored only after successful connection instead of before attempt
+- All navigation to connection page now uses clean URLs without query parameters
+
 ## [0.4.0] - 2025-11-13
 
 ### Fixed
 - Search from Subjects tab now correctly uses specific subject instead of stream's general pattern
 - Cancel button now immediately stops backend processing instead of continuing through empty chunks
 - Subject query parameter no longer persists when navigating to different streams
+- Connection failures now display error messages to users on both connection page and dashboard
+- Connection page error handling improved to extract error messages from different response structures
 
 ### Changed
 - Custom server name defaults to "Custom" so users don't need to enter it if not desired
@@ -20,6 +37,11 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Search button on Subjects tab passes expected message count for optimized backend searches
 - Client disconnect detection in backend to stop processing when user cancels or navigates away
+- Connection health monitoring system that detects when server goes down during operation
+- Full-screen error banner with retry options when connection is lost
+- Retry connection button for configured servers (automatically reconnects with stored credentials)
+- Change URL option for custom servers when connection fails
+- Global error handling across all API calls (streams, subjects, messages)
 
 ## [0.3.2] - 2025-11-12
 
