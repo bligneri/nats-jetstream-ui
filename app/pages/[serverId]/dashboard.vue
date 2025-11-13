@@ -39,6 +39,10 @@ definePageMeta({
 
                 // If still no connection, redirect to home
                 if (!status.hasConnectionDetails) {
+                    // For custom server (serverId=0), add hint that they need to connect
+                    if (serverId === 0) {
+                        return navigateTo("/?custom=true");
+                    }
                     return navigateTo("/");
                 }
             } catch (error) {
@@ -57,10 +61,39 @@ const serverId = computed(() => parseInt(route.params.serverId as string, 10));
 const servers = ref<any[]>([]);
 const currentServer = computed(() => servers.value.find(s => s.id === serverId.value));
 
+// Get custom server name from URL query param
+const customServerName = computed(() => route.query.serverName as string || '');
+
 const streams = ref<StreamInfo[]>([]);
 const selectedStream = ref<StreamInfo>();
 const isLoading = ref(true);
 const serverUrl = ref<string>(''); // Will be fetched from server
+
+// Format server URL to show only hostname:port (hide credentials)
+const formatServerUrl = (url: string): string => {
+    try {
+        const urlObj = new URL(url);
+        // Return just hostname:port
+        return `${urlObj.hostname}:${urlObj.port || (urlObj.protocol === 'https:' ? '443' : '4222')}`;
+    } catch {
+        // If URL parsing fails, try to extract host:port manually
+        const match = url.match(/\/\/([^@]+@)?([^\/]+)/);
+        if (match && match[2]) {
+            return match[2]; // Return host:port without credentials
+        }
+        return url; // Fallback to original
+    }
+};
+
+// Get display name for current server
+const serverDisplayName = computed(() => {
+    if (serverId.value === 0) {
+        // For custom servers, use the custom name if provided
+        const name = customServerName.value || 'Custom';
+        return `${name} (${formatServerUrl(serverUrl.value)})`;
+    }
+    return currentServer.value?.name || formatServerUrl(serverUrl.value);
+});
 
 onMounted(async () => {
     isLoading.value = true;
@@ -147,7 +180,7 @@ const handleServerSwitch = async (newServerId: number) => {
                 <div class="text-sm text-slate-400">
                     Server:
                     <span class="font-mono text-green-400">{{
-                        currentServer?.name || serverUrl
+                        serverDisplayName
                     }}</span>
                 </div>
                 <select
@@ -158,7 +191,7 @@ const handleServerSwitch = async (newServerId: number) => {
                     <option v-for="server in servers" :key="server.id" :value="server.id">
                         {{ server.name }}
                     </option>
-                    <option value="0">Custom Server...</option>
+                    <option value="0">{{ customServerName || 'Custom' }}</option>
                 </select>
             </div>
         </header>

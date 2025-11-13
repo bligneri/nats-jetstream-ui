@@ -34,6 +34,22 @@ const selectedStream = ref<StreamInfo>();
 const isLoading = ref(true);
 const serverUrl = ref<string>(''); // Will be fetched from server
 
+// Format server URL to show only hostname:port (hide credentials)
+const formatServerUrl = (url: string): string => {
+    try {
+        const urlObj = new URL(url);
+        // Return just hostname:port
+        return `${urlObj.hostname}:${urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80')}`;
+    } catch {
+        // If URL parsing fails, try to extract host:port manually
+        const match = url.match(/\/\/([^@]+@)?([^\/]+)/);
+        if (match && match[2]) {
+            return match[2]; // Return host:port without credentials
+        }
+        return url; // Fallback to original
+    }
+};
+
 onMounted(async () => {
     isLoading.value = true;
     try {
@@ -97,7 +113,7 @@ const handleDisconnect = async () => {
                 <div class="text-sm text-slate-400">
                     Connected to
                     <span class="font-mono text-green-400">{{
-                        serverUrl
+                        formatServerUrl(serverUrl)
                     }}</span>
                 </div>
                 <button

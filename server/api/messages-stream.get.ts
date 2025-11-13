@@ -2,7 +2,7 @@ import { defineEventHandler, getQuery, createError, setResponseHeaders } from 'h
 import { natsService } from '../utils/natsService';
 
 export default defineEventHandler(async (event) => {
-  const { subject, limit, beforeSeq, stream } = getQuery(event);
+  const { subject, limit, beforeSeq, stream, expectedCount } = getQuery(event);
 
   if (!subject || typeof subject !== 'string') {
     throw createError({
@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
   const limitNum = limit ? parseInt(limit as string, 10) : 50;
   const beforeSeqNum = beforeSeq ? parseInt(beforeSeq as string, 10) : undefined;
   const streamName = stream && typeof stream === 'string' ? stream : undefined;
+  const expectedCountNum = expectedCount ? parseInt(expectedCount as string, 10) : undefined;
 
   // Set headers for Server-Sent Events
   setResponseHeaders(event, {
@@ -24,7 +25,7 @@ export default defineEventHandler(async (event) => {
   });
 
   try {
-    console.log(`📬 API Stream: Starting stream for subject="${subject}", stream="${streamName || 'auto'}", limit=${limitNum}, beforeSeq=${beforeSeqNum || 'none'}`);
+    console.log(`📬 API Stream: Starting stream for subject="${subject}", stream="${streamName || 'auto'}", limit=${limitNum}, beforeSeq=${beforeSeqNum || 'none'}, expectedCount=${expectedCountNum || 'unknown'}`);
 
     let sent = 0;
     let lowestSeq = beforeSeqNum;
@@ -32,8 +33,18 @@ export default defineEventHandler(async (event) => {
     let consecutiveEmptyWindows = 0;
     const MAX_EMPTY_WINDOWS = 10; // Stop after 10 consecutive empty windows (100k messages)
 
+    // If we know the expected count, use it as the effective limit (but don't exceed requested limit)
+    const effectiveLimit = expectedCountNum ? Math.min(expectedCountNum, limitNum) : limitNum;
+    console.log(`📬 API Stream: Effective limit set to ${effectiveLimit} (expectedCount: ${expectedCountNum || 'N/A'}, requestedLimit: ${limitNum})`);
+
     // Keep fetching windows until we have enough messages or reach the beginning
-    while (sent < limitNum && hasMore) {
+    while (sent < effectiveLimit && hasMore) {
+      // Check if client has disconnected
+      if (event.node.req.destroyed || event.node.res.destroyed) {
+        console.log('🛑 API Stream: Client disconnected, stopping search');
+        break;
+      }
+
       console.log(`📬 API Stream: Fetching window (sent so far: ${sent}/${limitNum}, beforeSeq: ${lowestSeq || 'none'})`);
 
       // Send heartbeat to keep connection alive during long searches
@@ -43,7 +54,7 @@ export default defineEventHandler(async (event) => {
       }
 
       // Get messages from this window
-      const messageStream = natsService.getMessagesStream(subject, limitNum - sent, lowestSeq, streamName);
+      const messageStream = natsService.getMessagesStream(subject, effectiveLimit - sent, lowestSeq, streamName);
 
       let foundInWindow = 0;
       let windowLowestSeq = lowestSeq;
@@ -61,8 +72,16 @@ export default defineEventHandler(async (event) => {
         }
       }, 2000); // Send heartbeat every 2 seconds
 
+      let reachedLimit = false;
       try {
         for await (const message of messageStream) {
+          // Check if client has disconnected
+          if (event.node.req.destroyed || event.node.res.destroyed) {
+            console.log('🛑 API Stream: Client disconnected during message iteration, stopping');
+            hasMore = false; // Exit outer loop too
+            break;
+          }
+
           // Send message
           sent++;
           foundInWindow++;
@@ -78,9 +97,10 @@ export default defineEventHandler(async (event) => {
             windowLowestSeq = message.seq;
           }
 
-          // Stop if we've reached the limit
-          if (sent >= limitNum) {
-            console.log(`📬 API Stream: Reached limit of ${limitNum} messages`);
+          // Stop if we've reached the effective limit
+          if (sent >= effectiveLimit) {
+            console.log(`📬 API Stream: Reached effective limit of ${effectiveLimit} messages`);
+            reachedLimit = true;
             break;
           }
         }
@@ -96,6 +116,13 @@ export default defineEventHandler(async (event) => {
         // Move to next window from the lowest message we found
         lowestSeq = windowLowestSeq;
         consecutiveEmptyWindows = 0; // Reset empty window counter
+
+        // If we reached the limit, stop searching more windows
+        if (reachedLimit) {
+          hasMore = lowestSeq ? lowestSeq > 1 : false;
+          console.log(`📬 API Stream: Reached limit mid-window, hasMore=${hasMore} (lowestSeq=${lowestSeq})`);
+          break;
+        }
       } else {
         // Empty window - move to the start of the window we just searched
         // We searched [searchWindowStart, searchWindowEnd], so next window should start before searchWindowStart

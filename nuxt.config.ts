@@ -42,6 +42,32 @@ export default defineNuxtConfig({
       // Default is 10 seconds, we need more for streaming searches
       idleTimeout: 300, // 5 minutes in seconds
     },
+    logLevel: process.env.NODE_ENV === 'production' ? 3 : 4, // info in prod, debug in dev
+    experimental: {
+      openAPI: false,
+    },
+  },
+  // Override console.log to use ISO timestamps
+  hooks: {
+    'nitro:config': (nitroConfig) => {
+      // Monkey-patch console methods to add ISO timestamps
+      const originalLog = console.log;
+      const originalError = console.error;
+      const originalWarn = console.warn;
+      const originalInfo = console.info;
+
+      const withTimestamp = (method: typeof console.log) => {
+        return function(...args: any[]) {
+          const timestamp = new Date().toISOString();
+          method.call(console, `[${timestamp}]`, ...args);
+        };
+      };
+
+      console.log = withTimestamp(originalLog);
+      console.error = withTimestamp(originalError);
+      console.warn = withTimestamp(originalWarn);
+      console.info = withTimestamp(originalInfo);
+    },
   },
   vite: {
     plugins: [tailwindcss()],

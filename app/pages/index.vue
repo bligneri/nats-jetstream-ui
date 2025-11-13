@@ -29,6 +29,7 @@ onMounted(async () => {
 });
 
 const serverUrl = ref(config.public.natsUrl || '');
+const serverName = ref('Custom'); // Default to "Custom" so users don't have to enter it
 
 // Watch for custom URL input - if user types, switch to custom mode
 watch(serverUrl, (newVal) => {
@@ -49,8 +50,11 @@ watch(selectedServerId, (newVal) => {
 // Check if user manually disconnected (came from dashboard)
 const manualDisconnect = ref(route.query.disconnected === 'true');
 
+// Check if user is trying to access custom server without connection
+const needsCustomServer = ref(route.query.custom === 'true');
+
 // Start in connecting state if auto-connect is configured AND not manually disconnected
-const shouldAutoConnect = !!config.public.natsUrl && !manualDisconnect.value;
+const shouldAutoConnect = !!config.public.natsUrl && !manualDisconnect.value && !needsCustomServer.value;
 const isConnecting = ref(shouldAutoConnect);
 const error = ref<string | null>(null);
 const showForm = ref(!shouldAutoConnect);
@@ -78,6 +82,13 @@ const handleConnect = async () => {
     return;
   }
 
+  // For custom servers, require a name
+  if (targetServerId === 0 && !serverName.value.trim()) {
+    error.value = 'Please enter a name for your custom server';
+    isConnecting.value = false;
+    return;
+  }
+
   const details: NatsConnectionDetails = {
     serverUrl: url,
     user: '',
@@ -90,7 +101,12 @@ const handleConnect = async () => {
     });
     setConnection(details);
     // Redirect to server-specific dashboard with full page reload
-    const dashboardUrl = `/${targetServerId || selectedServerId.value || 1}/dashboard`;
+    // Use targetServerId (which is 0 for custom servers)
+    // For custom servers, include the name in the URL
+    let dashboardUrl = `/${targetServerId}/dashboard`;
+    if (targetServerId === 0 && serverName.value.trim()) {
+      dashboardUrl += `?serverName=${encodeURIComponent(serverName.value.trim())}`;
+    }
     window.location.href = dashboardUrl;
   } catch (err: any) {
     error.value = err.data?.statusMessage || 'An unknown error occurred.';
@@ -135,6 +151,13 @@ if (shouldAutoConnect) {
       </div>
 
       <div class="rounded-lg bg-slate-800/50 p-8 shadow-2xl backdrop-blur-sm">
+        <!-- Custom server hint -->
+        <div v-if="needsCustomServer" class="mb-4 rounded-md bg-blue-500/10 border border-blue-500/30 p-3">
+          <p class="text-sm text-blue-300">
+            <span class="font-semibold">Custom Server Required:</span> Please enter your NATS server URL below to connect.
+          </p>
+        </div>
+
         <form @submit.prevent="handleConnect" class="space-y-6">
           <!-- Server Selection -->
           <div v-if="servers.length > 0">
@@ -151,6 +174,14 @@ if (shouldAutoConnect) {
           </div>
 
           <div class="text-center text-sm text-slate-500">— or —</div>
+
+          <UiInput
+            id="serverName"
+            label="Custom Server Name"
+            type="text"
+            v-model="serverName"
+            placeholder="e.g., Production, Local Dev"
+          />
 
           <UiInput
             id="serverUrl"

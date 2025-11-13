@@ -31,6 +31,17 @@ const filteredStreams = computed(() => {
 
 const showSearch = computed(() => props.streams.length > 30);
 
+// Helper to check if stream is inactive (last message > 1 day ago or no messages)
+const isStreamInactive = (stream: StreamInfo) => {
+  // No messages = inactive
+  if (stream.state.messages === 0) return true;
+  // No timestamp = can't determine, assume not inactive
+  if (!stream.state.last_ts) return false;
+  const lastMessageTime = new Date(stream.state.last_ts).getTime();
+  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+  return lastMessageTime < oneDayAgo;
+};
+
 // Helper to extract display parts for virtual streams
 const getStreamDisplayName = (stream: StreamInfo) => {
   if (stream.isVirtual && stream.virtualSubject) {
@@ -82,9 +93,18 @@ const getStreamDisplayName = (stream: StreamInfo) => {
               </span>
             </div>
           </div>
-          <div class="flex items-center space-x-1 text-xs text-slate-400 flex-shrink-0 ml-2">
-            <MessageIcon class="h-3 w-3" />
-            <span>{{ stream.state.messages === -1 ? '?' : stream.state.messages.toLocaleString() }}</span>
+          <div class="flex items-center space-x-2 text-xs flex-shrink-0 ml-2">
+            <div class="flex items-center space-x-1 text-slate-400">
+              <MessageIcon class="h-3 w-3" />
+              <span>{{ stream.state.messages === -1 ? '?' : stream.state.messages.toLocaleString() }}</span>
+            </div>
+            <span
+              v-if="isStreamInactive(stream)"
+              class="inline-flex items-center rounded-full bg-slate-600/50 px-2 py-0.5 text-xs text-slate-400"
+              title="No messages in the last 24 hours"
+            >
+              Inactive
+            </span>
           </div>
         </button>
       </li>

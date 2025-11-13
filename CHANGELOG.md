@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2025-11-13
+
+### Fixed
+- Search from Subjects tab now correctly uses specific subject instead of stream's general pattern
+- Cancel button now immediately stops backend processing instead of continuing through empty chunks
+- Subject query parameter no longer persists when navigating to different streams
+
+### Changed
+- Custom server name defaults to "Custom" so users don't need to enter it if not desired
+- Custom server selector displays actual server name instead of generic "Custom Server..."
+- Console logs now use UTC ISO format timestamps in both development and production
+- Backend stops searching after finding expected message count (optimized for single-message subjects)
+- Load More button hidden when all expected messages are loaded
+- Message count displays "X/Y messages loaded" format when expected count is known
+
+### Added
+- Search button on Subjects tab passes expected message count for optimized backend searches
+- Client disconnect detection in backend to stop processing when user cancels or navigates away
+
 ## [0.3.2] - 2025-11-12
 
 ### Fixed

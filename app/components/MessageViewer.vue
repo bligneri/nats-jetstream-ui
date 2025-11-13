@@ -15,11 +15,23 @@ const props = defineProps<{
   serverId?: number;
 }>();
 
+const route = useRoute();
+
 // Convert first subject to a wildcard pattern that will match all messages
 // e.g., "commands.*" stays as "commands.*", "commands.dlq.>" becomes "commands.dlq.*"
+// BUT prioritize query parameter if it exists (from Subjects tab click)
 const defaultSubject = props.subjects[0] || '';
-const subject = ref(defaultSubject);
-const debouncedSubject = ref(defaultSubject);
+console.log('📥 MessageViewer initializing:', {
+  defaultSubject,
+  querySubject: route.query.subject,
+  allQuery: route.query
+});
+const initialSubject = (route.query.subject && typeof route.query.subject === 'string')
+  ? route.query.subject
+  : defaultSubject;
+console.log('📥 MessageViewer using initialSubject:', initialSubject);
+const subject = ref(initialSubject);
+const debouncedSubject = ref(initialSubject);
 const messages = ref<NatsMessage[]>([]);
 const isStreaming = ref(false);
 const error = ref<string | null>(null);
@@ -37,6 +49,22 @@ const MESSAGES_PER_PAGE = 50;
 onMounted(async () => {
   const { loadDecorators } = await import('~/utils/messageDecorators');
   decorators.value = await loadDecorators(props.serverId);
+
+  // Fetch messages if we initialized with a query parameter subject
+  if (route.query.subject && typeof route.query.subject === 'string') {
+    fetchMessages();
+  }
+});
+
+// Watch for subject query parameter changes
+watch(() => route.query.subject, (newSubject) => {
+  console.log('📥 Query subject changed to:', newSubject);
+  if (newSubject && typeof newSubject === 'string') {
+    console.log('📥 Setting subject to:', newSubject);
+    subject.value = newSubject;
+    debouncedSubject.value = newSubject;
+    fetchMessages();
+  }
 });
 
 // Auto-cancel streaming when component unmounts or user navigates away
@@ -64,11 +92,11 @@ async function fetchMessages(loadMore = false) {
   if (!loadMore) {
     messages.value = [];
     lowestSeqSeen.value = null;
+    hasMoreMessages.value = false;
   }
   error.value = null;
   streamProgress.value = 'Connecting...';
   showMemoryWarning.value = false;
-  hasMoreMessages.value = false;
 
   try {
     const params = new URLSearchParams({
@@ -78,6 +106,12 @@ async function fetchMessages(loadMore = false) {
 
     if (props.streamName) {
       params.append('stream', props.streamName);
+    }
+
+    // If expectedCount is in URL query, pass it to API for optimization
+    if (route.query.expectedCount && typeof route.query.expectedCount === 'string') {
+      params.append('expectedCount', route.query.expectedCount);
+      console.log('📥 Passing expectedCount to API:', route.query.expectedCount);
     }
 
     // If loading more, tell backend to search before the lowest seq we've seen
@@ -113,7 +147,15 @@ async function fetchMessages(loadMore = false) {
             console.log(`📍 Updated continuation point to seq ${data.continueFromSeq}`);
           }
 
-          if (data.hasMore) {
+          // Check if we've loaded all expected messages
+          const expectedCount = route.query.expectedCount ? parseInt(route.query.expectedCount as string, 10) : null;
+          const loadedAllExpected = expectedCount !== null && messages.value.length >= expectedCount;
+
+          if (loadedAllExpected) {
+            // We've loaded all messages we expected, don't show "Load More"
+            hasMoreMessages.value = false;
+            streamProgress.value = `Complete: ${messages.value.length}/${expectedCount} messages found`;
+          } else if (data.hasMore) {
             hasMoreMessages.value = true;
             streamProgress.value = `Loaded ${messages.value.length} messages (more available)`;
           } else {
@@ -135,11 +177,6 @@ async function fetchMessages(loadMore = false) {
         if (messagesInThisBatch < MESSAGES_PER_PAGE) {
           messages.value.push(data as NatsMessage);
           messagesInThisBatch++;
-
-          // Track lowest sequence number seen
-          if (lowestSeqSeen.value === null || data.seq < lowestSeqSeen.value) {
-            lowestSeqSeen.value = data.seq;
-          }
 
           streamProgress.value = `Streaming... ${messages.value.length} messages found`;
 
@@ -394,7 +431,9 @@ function copyFullMessage(msg: NatsMessage) {
     <div v-if="messages.length > 0 && !isStreaming" class="mt-2 flex items-center justify-between">
       <div class="rounded-md bg-slate-700/50 border border-slate-600 px-3 py-2">
         <p class="text-sm font-medium text-slate-300">
-          <span class="text-green-400">{{ messages.length }}</span> messages loaded
+          <span class="text-green-400">{{ messages.length }}</span>
+          <span v-if="route.query.expectedCount">/{{ route.query.expectedCount }}</span>
+          <span> message{{ messages.length !== 1 ? 's' : '' }} loaded</span>
           <span v-if="lowestSeqSeen" class="text-slate-500 ml-2">(oldest: seq {{ lowestSeqSeen }})</span>
         </p>
       </div>
@@ -533,7 +572,9 @@ function copyFullMessage(msg: NatsMessage) {
         <div class="flex items-center justify-center">
           <div class="rounded-md bg-slate-700/50 border border-slate-600 px-3 py-2">
             <p class="text-sm font-medium text-slate-300">
-              <span class="text-green-400">{{ messages.length }}</span> messages loaded
+              <span class="text-green-400">{{ messages.length }}</span>
+              <span v-if="route.query.expectedCount">/{{ route.query.expectedCount }}</span>
+              <span> message{{ messages.length !== 1 ? 's' : '' }} loaded</span>
               <span v-if="lowestSeqSeen" class="text-slate-500 ml-2">(oldest: seq {{ lowestSeqSeen }})</span>
             </p>
           </div>
