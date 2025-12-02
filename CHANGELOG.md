@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2025-12-02
+
+### Added
+- Disconnect button in dashboard header to return to connection page
+
+### Fixed
+- Connection page no longer auto-selects first server on load (waits for user input)
+- Connection page UI now correctly shows server details when configured server is selected, or custom form when "Custom Server" is selected
+- Custom server dashboard (`/0/dashboard`) now redirects to connection page if not connected
+- Auto-connect from `NUXT_PUBLIC_NATS_URL` env var now respects explicit disconnect (uses `?disconnected=true` query param)
+
+### Changed
+- All dashboard navigation to connection page uses full page reload to clear client-side state
+
 ## [0.4.1] - 2025-11-13
 
 ### Fixed

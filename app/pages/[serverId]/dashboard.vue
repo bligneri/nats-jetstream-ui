@@ -15,38 +15,52 @@ definePageMeta({
             const serverId = parseInt(to.params.serverId as string, 10);
             console.log('🛂 Middleware: Navigating to serverId:', serverId, 'from:', from?.params?.serverId);
 
-            // Always try to connect to the requested server (for configured servers)
-            try {
-                if (serverId > 0) {
-                    const serverConfig = await $fetch<any>('/api/servers');
-                    const server = serverConfig.servers?.find((s: any) => s.id === serverId);
-                    console.log('🛂 Middleware: Found server config for serverId', serverId, ':', server);
-
-                    if (server) {
-                        try {
-                            console.log('🛂 Middleware: Attempting to connect to', server.url);
-                            // Always try to connect to ensure we're on the right server
-                            await $fetch('/api/connect', {
-                                method: 'POST',
-                                body: {
-                                    serverUrl: server.url,
-                                    user: '',
-                                    password: '',
-                                },
-                            });
-                            console.log('🛂 Middleware: Connection successful');
-                            return; // Connection successful, continue to dashboard
-                        } catch (connectError) {
-                            // Connection failed - let the page load so it can show the error banner
-                            console.error('🛂 Middleware: Connection failed, will show error banner:', connectError);
-                            return; // Continue to dashboard which will detect the error and show banner
-                        }
+            // For custom servers (serverId=0), check if there's an active connection
+            // If not, redirect to connection page
+            if (serverId === 0) {
+                try {
+                    const status = await $fetch<{ connected: boolean; hasConnectionDetails: boolean }>('/api/connection-status');
+                    if (!status.connected) {
+                        console.log('🛂 Middleware: Custom server not connected, redirecting to connection page');
+                        return navigateTo('/?custom=true');
                     }
+                } catch (error) {
+                    console.error('🛂 Middleware: Failed to check connection status:', error);
+                    return navigateTo('/?custom=true');
                 }
+                return; // Connection exists, continue to dashboard
+            }
 
-                console.log('🛂 Middleware: Allowing page to load (custom server or no config)');
-                // For custom servers (serverId=0), let the page load
-                // It will detect the error and show the connection error banner
+            // For configured servers (serverId > 0), try to connect
+            try {
+                const serverConfig = await $fetch<any>('/api/servers');
+                const server = serverConfig.servers?.find((s: any) => s.id === serverId);
+                console.log('🛂 Middleware: Found server config for serverId', serverId, ':', server);
+
+                if (server) {
+                    try {
+                        console.log('🛂 Middleware: Attempting to connect to', server.url);
+                        // Always try to connect to ensure we're on the right server
+                        await $fetch('/api/connect', {
+                            method: 'POST',
+                            body: {
+                                serverUrl: server.url,
+                                user: '',
+                                password: '',
+                            },
+                        });
+                        console.log('🛂 Middleware: Connection successful');
+                        return; // Connection successful, continue to dashboard
+                    } catch (connectError) {
+                        // Connection failed - let the page load so it can show the error banner
+                        console.error('🛂 Middleware: Connection failed, will show error banner:', connectError);
+                        return; // Continue to dashboard which will detect the error and show banner
+                    }
+                } else {
+                    // Server not found in config, redirect to connection page
+                    console.log('🛂 Middleware: Server not found, redirecting to connection page');
+                    return navigateTo('/');
+                }
             } catch (error) {
                 console.error('🛂 Middleware: Failed in middleware:', error);
                 // Let the page load anyway, it will handle the error
@@ -160,7 +174,7 @@ const handleServerSwitch = async (newServerId: number) => {
         } catch (error) {
             console.error('Failed to disconnect:', error);
         }
-        router.push("/");
+        window.location.href = "/?disconnected=true";
     } else {
         // Switch to another configured server
         const server = servers.value.find(s => s.id === newServerId);
@@ -184,7 +198,8 @@ const handleRetry = async () => {
     try {
         if (serverId.value === 0) {
             // Custom server - redirect to connection page to enter new URL
-            router.push("/?custom=true");
+            window.location.href = "/?custom=true";
+            return;
         } else {
             // Configured server - attempt to reconnect
             const server = servers.value.find(s => s.id === serverId.value);
@@ -211,7 +226,19 @@ const handleRetry = async () => {
 
 // Navigate to connection page to change URL
 const handleChangeUrl = () => {
-    router.push("/");
+    window.location.href = "/?disconnected=true";
+};
+
+// Disconnect from current server and go to connection page
+const handleDisconnect = async () => {
+    try {
+        await $fetch('/api/disconnect', { method: 'POST' });
+    } catch (error) {
+        console.error('Failed to disconnect:', error);
+    }
+    // Use full page navigation to clear all client-side state
+    // Add ?disconnected=true to prevent auto-reconnect if NATS_URL env var is set
+    window.location.href = "/?disconnected=true";
 };
 </script>
 
@@ -249,6 +276,12 @@ const handleChangeUrl = () => {
                     </option>
                     <option value="0">{{ customServerName || 'Custom' }}</option>
                 </select>
+                <button
+                    @click="handleDisconnect"
+                    class="rounded-md bg-red-500/20 border border-red-500/50 px-3 py-1 text-sm text-red-400 hover:bg-red-500/30 hover:text-red-300 transition-colors"
+                >
+                    Disconnect
+                </button>
             </div>
         </header>
 
@@ -293,7 +326,7 @@ const handleChangeUrl = () => {
 
                         <!-- Alternative: Go to connection page -->
                         <button
-                            @click="() => router.push('/')"
+                            @click="() => window.location.href = '/?disconnected=true'"
                             class="px-6 py-3 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold transition-colors min-w-[200px]"
                         >
                             Go to Connection Page
